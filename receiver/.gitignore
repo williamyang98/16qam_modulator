@@ -1,0 +1,6 @@
+/build
+/data
+*.pdb
+imgui.ini
+.vscode/
+log.txt

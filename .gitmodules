@@ -1,0 +1,7 @@
+[submodule "imgui"]
+	path = receiver/vendor/imgui
+	url = https://github.com/ocornut/imgui.git
+
+[submodule "implot"]
+	path = receiver/vendor/implot
+	url = https://github.com/epezent/implot.git

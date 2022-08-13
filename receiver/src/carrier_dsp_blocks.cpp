@@ -1,0 +1,161 @@
+#include "carrier_dsp_blocks.h"
+
+#define _USE_MATH_DEFINES
+#include <math.h>
+
+constexpr float PI = (float)M_PI;
+
+// get the phase error from the known constellation
+ConstellationErrorResult estimate_phase_error(const std::complex<float> x, const std::complex<float>* C, const int N) {
+    int min_index = 0;
+    float best_mag_error = INFINITY;
+    for (int i = 0; i < N; i++) {
+        auto error = x - C[i];
+        auto I = error.real();
+        auto Q = error.imag();
+        auto mag_error = I*I + Q*Q;
+
+        if (mag_error < best_mag_error) {
+            best_mag_error = mag_error;
+            min_index = i;
+        }
+    }
+
+    const auto closest_point = C[min_index];
+    const float angle1 = std::atan2f(closest_point.real(), closest_point.imag());
+    const float angle2 = std::atan2f(x.real(), x.imag());
+
+    float phase_error = angle1-angle2;
+    phase_error = std::fmodf(phase_error + 3*PI, 2*PI);
+    phase_error -= PI;
+
+    float mag_error = std::abs(closest_point) - std::abs(x);
+    mag_error = std::abs(mag_error);
+
+    return {phase_error, mag_error};
+}
+
+PLL_mixer::PLL_mixer() {
+    phase_error = 0.0f;
+    phase_error_gain = 4.0f/PI;
+    fcenter = 0e3;
+    fgain = 1e3;
+}
+
+std::complex<float> PLL_mixer::update(void) {
+    float control = phase_error * phase_error_gain;
+    control = std::max(std::min(control, 1.0f), -1.0f);
+    float freq = fcenter + control*fgain;
+    float t = integrator.process(2.0f*PI*freq);
+    t = fmodf(t, 2*PI);
+    integrator.yn = t;
+
+    float I = std::cosf(t);
+    float Q = std::sinf(t);
+    return std::complex<float>(I, Q);
+}
+
+// timing error detector clock
+TED_Clock::TED_Clock() {
+    phase_error = 0.0f;
+    phase_error_gain = 1.0f;      // the phase error is +-1 from zero crossing detector
+    fcenter = 10e3;
+    fgain = 5e3;
+}
+
+// get current voltage in ramp integrator
+float TED_Clock::get_current_timing() {
+    return integrator.yn;
+}
+
+// get a normalised error if oscillator is out of sync
+float TED_Clock::get_timing_error() {
+    float error = get_current_timing();
+    error = 2.0f * error;
+    // if the zero crossing occurs past the half symbol mark then error is  [-1,0]
+    if (error > 1.0f) {
+        return error - 2.0f;
+    }
+    // otherwise if zero crossing occurs before the half symbol mark, then error is [0,1]
+    return error;
+}
+
+// return true if the oscillator resets this sample
+bool TED_Clock::update() {
+    float control = phase_error * phase_error_gain;
+    control = std::max(std::min(control, 1.0f), -1.0f);
+    float freq = fcenter*fcenter_factor + control*fgain;
+    float v = integrator.process(freq);
+    float offset = integrator.KTs * freq;
+    if (v < (1.0f-offset)) {
+        return false;
+    }
+    // reset integrator otherwise
+    integrator.yn = 0.0f;
+    return true;
+}
+
+bool Zero_Crossing_Detector::process(float x) {
+    // crossing occurs if the signals are on opposite sides of the x-axis
+    bool is_crossed = (x*xn) < 0.0f;
+    xn = x;
+    return is_crossed;
+}
+
+// only propagate trigger signal if sample cooldown has passed
+bool Trigger_Cooldown::on_trigger(bool trig) {
+    if (trig && (N_remain == 0)) {
+        N_remain = N_cooldown;
+        return true;
+    }
+    if (N_remain > 0) {
+        N_remain--;
+    }
+    return false;
+}
+
+// number of triggers to store in memory
+Delay_Line::Delay_Line(const int _N) 
+: N(_N)
+{
+    counts = new int[N]{-1};
+    curr_count = 0;
+}
+
+Delay_Line::~Delay_Line() {
+    delete [] counts;
+}
+
+// return false if we couldn't add this to delay line
+bool Delay_Line::add(int delay) {
+    // if the delay line is full, we ignore this pulse
+    if (curr_count >= N) {
+        return false;
+    }
+
+    curr_count++;
+    for (int i = 0; i < N; i++) {
+        if (counts[i] < 0) {
+            counts[i] = delay;
+            break;
+        }
+    }
+    return true;
+}
+
+bool Delay_Line::process(void) {
+    bool trig_out = false;
+    for (int i = 0; i < N; i++) {
+        if (counts[i] < 0) {
+            continue;
+        }
+
+        // remove a sample
+        if (counts[i] == 0) {
+            trig_out = true;
+            curr_count--;
+        }         
+        counts[i]--;
+    }
+    return trig_out;
+}
