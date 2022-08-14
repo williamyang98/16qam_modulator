@@ -5,3 +5,9 @@
 [submodule "implot"]
 	path = receiver/vendor/implot
 	url = https://github.com/epezent/implot.git
+[submodule "receiver/vendor/imgui"]
+	path = receiver/vendor/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "receiver/vendor/implot"]
+	path = receiver/vendor/implot
+	url = https://github.com/epezent/implot.git
