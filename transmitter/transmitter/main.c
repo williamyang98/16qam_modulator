@@ -15,33 +15,43 @@
 #include "scrambler.h"
 
 #define DEBUG_SIGNALS 1
+#define DEBUG_PORT PORTB
 
+#define DEBUG_PIN_ENCODING	PORTB0 // pin 8		Pulse to keep track of time spent encoding
+#define DEBUG_PIN_PACKET	PORTB5 // pin 13	Toggled every time a packet has been created
+#define DEBUG_PIN_TRANSMIT	PORTB3 // pin 11	Pulse to keep track of time spent on transmit interrupt
+#define DEBUG_PIN_ADC		PORTB4 // pin 12	Pulse to keep track of time spent on ADC interrupt
+
+
+// Constants used for our encoding pipeline
 const uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
 const uint16_t SCRAMBLER_CODE = 0b1000010101011001;
 const uint8_t CRC8_POLY = 0xD5;
+
+// We are outputing 4QAM onto pins 4 to 7 which are on 0xF0 PORTD
+// index = [00, 01, 10, 11] = I|Q ==> I=0b1100, Q=0b0011
+const uint8_t qam_data[4] = {0b00000000, 0b11000000, 0b00110000, 0b11110000};
 
 // Formula for encoded frame size
 // M = 2*(N+2+1) + 4
 // M = 2*N+10
 
 #define ADC_BUFFER_SIZE 100
-
 // ADC frame is 210B
 #define ADC_ENC_FRAME_SIZE ((ADC_BUFFER_SIZE+2+1)*2 + 4)
 
 // Message frame is 40B
 #define SAMPLE_MESSAGE_LENGTH 15
-uint8_t SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH] = {0};
 #define MESSAGE_ENC_FRAME_SIZE ((SAMPLE_MESSAGE_LENGTH+2+1)*2 + 4)
 
 // Each frame transmitted at 250B blocks
 // ADC frame is 210B
 // Message frame is 40B
-
 // We want to fit 1 audio frame and some extra data
 #define TX_BUFFER_SIZE 250
 
-const uint8_t qam_data[4] = {0b00000000, 0b11000000, 0b00110000, 0b11110000};
+// Our extra data frame
+uint8_t SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH] = {0};
 
 // ADC buffers
 uint8_t ADC_BUFFER_0[ADC_BUFFER_SIZE] = {0};
@@ -60,6 +70,7 @@ volatile uint8_t* TX_BUFFER_WR = TX_BUFFER_0;
 volatile uint8_t* TX_BUFFER_RD = TX_BUFFER_1;
 volatile uint32_t curr_tx_rd_byte = 0;
 volatile uint8_t tx_buffer_wr_ready = 1;
+int tx_buffer_byte_shift = 6;
 
 int generate_packet(uint8_t* x, const int N, uint8_t* y);
 
@@ -88,20 +99,21 @@ int main(void)
 	OCR1A = 1;	// sets the TOP value for CTC oscillator for both channels A and B (f = fclk/(2*(1+TOP)) = 4MHz
 	OCR1B = 0;  // sets the value when it toggles (Setting it to 0 gives a 90' phase shift)
 	
-	// setup Timer 0 channel A for ADC sampling
-	TCCR0A = (1 << WGM01);
-	TCCR0B = (1 << CS01); // Prescaler = 8
-	OCR0A = 39;			  // F = 50kHz
-	// NOTE: Disabling second ISR to check if it causes glitches in symbol tx interrupt
-	TIMSK0 = (1 << OCIE0A);
 	
-	// NOTE: We use timer 2 for the symbol transmit since it has a higher interrupt priority than timer 0
+	// Setup Timer 0 channel A for symbol transmitting @ 50kHz ===> 100kb/s
+	// NOTE: We use timer 0 for the symbol transmit since it has a higher interrupt priority than timer 0
 	// This is because interrupt vectors with lower addresses have higher priority
 	// NOTE: Page 49 - Interrupt Vectors in ATmega328p
 	//       Page 15 - Reset and Interrupt Handling - "The lower the address the higher is the priority level"
+	TCCR0A = (1 << WGM01);
+	TCCR0B = (1 << CS01); // Prescaler = 8
+	OCR0A = 39;			  // F = 50kHz
+	TIMSK0 = (1 << OCIE0A);
+	
+	// setup Timer 2 channel A for ADC sampling @ 5kHz ===> 5kB/s
 	TCCR2A = (1 << WGM21);
 	TCCR2B = (1 << CS21) | (1 << CS20); // Prescaler = 32
-	OCR2A = 99;			  // F = 5kHz
+	OCR2A = 99;							// F = 5kHz
 	TIMSK2 = (1 << OCIE2A);
 	
 	// ADC setup
@@ -113,27 +125,18 @@ int main(void)
 	ADCSRA = (1 << ADPS2) | (1 << ADPS1);
 	ADCSRA |= (1 << ADEN);	// enable adc
 	
-	
-    /* Replace with your application code */
-	
+	// Initialise our encoding pipeline	
 	crc8_generate_table(CRC8_POLY);
 	conv_enc_calculate_table(0b111, 0b101);
 	scrambler_init(SCRAMBLER_CODE);
 	
-	
+	// Reset counter and flags for ADC and transmit buffers
 	curr_tx_rd_byte = 0;
 	tx_buffer_wr_ready = 1;
 	curr_adc_wr_byte = 0;
 	adc_buffer_rd_ready = 1;
 	
-	// initialise our adc buffers with some test data
-	for (int i = 0; i < ADC_BUFFER_SIZE; i++) {
-		ADC_BUFFER_0[i] = '0'+i;
-		ADC_BUFFER_1[i] = '0'+i;
-	}
-	ADC_BUFFER_0[ADC_BUFFER_SIZE-1] = 0;
-	ADC_BUFFER_1[ADC_BUFFER_SIZE-1] = 0;
-	
+	// Store a sample message in our misc data buffer
 	for (int i = 0; i < SAMPLE_MESSAGE_LENGTH; i++) {
 		SAMPLE_MESSAGE[i] = 'A' + i;
 	}
@@ -143,34 +146,34 @@ int main(void)
 	
     while (1) 
     {
-		// busy wait until ready to write to buffer
-		
+		// Busy wait until ADC and transmit buffers are ready via flags
 		while (!(tx_buffer_wr_ready && adc_buffer_rd_ready));
 		#if DEBUG_SIGNALS
-		PORTB ^= (1 << PORTB5);
+		DEBUG_PORT ^= (1 << DEBUG_PIN_PACKET);
 		#endif
 		
 		#if DEBUG_SIGNALS
-		PORTB |= (1 << PORTB0);
+		DEBUG_PORT |= (1 << DEBUG_PIN_ENCODING);
 		#endif
 		
 		tx_buffer_wr_ready = 0;
 		adc_buffer_rd_ready = 0;
 		
-		
+		// Create our packets
+		// NOTE: This cannot take too long otherwise we have a half-written packet used for transmit
 		uint8_t* tx_buf = TX_BUFFER_WR;
 		int tx_buf_byte = 0;
 		tx_buf_byte += generate_packet(ADC_BUFFER_RD, ADC_BUFFER_SIZE, &tx_buf[tx_buf_byte]);
 		tx_buf_byte += generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[tx_buf_byte]);
 		
 		#if DEBUG_SIGNALS
-		PORTB &= ~(1 << PORTB0);
+		DEBUG_PORT &= ~(1 << DEBUG_PIN_ENCODING);
 		#endif
     }
 }
 
+// Our encoding pipeline
 int generate_packet(uint8_t* x, const int N, uint8_t* y) {
-	
 	conv_enc_reset();
 	scrambler_reset();
 	uint8_t crc8 = crc8_calculate(x, N);
@@ -196,14 +199,11 @@ int generate_packet(uint8_t* x, const int N, uint8_t* y) {
 	return offset;
 }
 
-volatile uint8_t* tx_buffer_swap_tmp;
-
-int tx_buffer_byte_shift = 6;
 
 // symbol transmitter
 ISR(TIMER0_COMPA_vect) {
 	#if DEBUG_SIGNALS
-	PORTB |= (1 << PORTB3);
+	DEBUG_PORT |= (1 << DEBUG_PIN_TRANSMIT);
 	#endif
 	
 	const uint8_t b = TX_BUFFER_RD[curr_tx_rd_byte];
@@ -220,38 +220,37 @@ ISR(TIMER0_COMPA_vect) {
 	// raise flag for main loop to begin writing
 	if (curr_tx_rd_byte == TX_BUFFER_SIZE) {
 		curr_tx_rd_byte = 0;
-		tx_buffer_swap_tmp = TX_BUFFER_RD;
+		uint8_t* tmp = TX_BUFFER_RD;
 		TX_BUFFER_RD = TX_BUFFER_WR;
-		TX_BUFFER_WR = tx_buffer_swap_tmp;
+		TX_BUFFER_WR = tmp;
 		tx_buffer_wr_ready = 1;
 	}
 	
 	#if DEBUG_SIGNALS
-	PORTB &= ~(1 << PORTB3);
+	DEBUG_PORT &= ~(1 << DEBUG_PIN_TRANSMIT);
 	#endif
 }
 
-volatile uint8_t* adc_buffer_swap_tmp;
-
-// ADC fetching at 6.25kHz
+// ADC sampling interrupt
 ISR(TIMER2_COMPA_vect) {
 	#if DEBUG_SIGNALS
-	PORTB |= (1 << PORTB4);
+	DEBUG_PORT |= (1 << DEBUG_PIN_ADC);
 	#endif
 	
 	ADC_BUFFER_WR[curr_adc_wr_byte++] = ADCH;
 	ADCSRA |= (1 << ADIF);
 	ADCSRA |= (1 << ADSC); // take a single conversion
+	
 	if (curr_adc_wr_byte == ADC_BUFFER_SIZE) {
 		curr_adc_wr_byte = 0;
-		adc_buffer_swap_tmp = ADC_BUFFER_RD;
+		uint8_t* tmp = ADC_BUFFER_RD;
 		ADC_BUFFER_RD = ADC_BUFFER_WR;
-		ADC_BUFFER_WR = adc_buffer_swap_tmp;
+		ADC_BUFFER_WR = tmp;
 		adc_buffer_rd_ready = 1;
 	}
 	
 	#if DEBUG_SIGNALS
-	PORTB &= ~(1 << PORTB4);
+	DEBUG_PORT &= ~(1 << DEBUG_PIN_ADC);
 	#endif
 }
 
