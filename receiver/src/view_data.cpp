@@ -46,7 +46,8 @@ static void glfw_error_callback(int error, const char* description)
 void demodulator_thread(
     FILE* fp, CarrierToSymbolDemodulator* demod, const int block_size,
     CarrierToSymbolDemodulatorBuffers* snapshot_buffer, bool* snapshot_trigger,
-    uint8_t* audio_buffer, const int audio_buffer_size) 
+    uint8_t* audio_buffer, const int audio_buffer_size,
+    int* audio_gain) 
 {
     auto x_buffer = new std::complex<uint8_t>[block_size];
     auto y_buffer = new std::complex<float>[block_size];
@@ -63,7 +64,7 @@ void demodulator_thread(
     float* audio_filter_buffer = new float[audio_buffer_size];
     uint16_t* pcm_buffer = new uint16_t[audio_buffer_size];
 
-    auto payload_handler = [&pcm_buffer, &audio_buffer, &curr_audio_buffer_index, audio_buffer_size](uint8_t* x, const uint16_t N) {
+    auto payload_handler = [&pcm_buffer, &audio_buffer, &curr_audio_buffer_index, audio_buffer_size, &audio_gain](uint8_t* x, const uint16_t N) {
         // if not an audio block
         if (N != 100) {
             LOG_MESSAGE("message=%.*s\n", N, x);
@@ -79,7 +80,7 @@ void demodulator_thread(
             // amplify the signal
             int16_t v0 = static_cast<int16_t>(v);
             v0 = v0-127;
-            v0 = v0 * 16;
+            v0 = v0 * (*audio_gain);
             v0 = v0 + (1u << 8);
             uint16_t v1 = (uint16_t)(v0);
             v1 = v1 * 2;
@@ -145,12 +146,13 @@ int main(int argc, char** argv)
 
     const int audio_buffer_size = 5000;
     uint8_t audio_buffer[audio_buffer_size] = {0};
+    int audio_gain = 16;
     
     auto demod_thread = std::thread(
         demodulator_thread, 
         fp_in, &demod, block_size, 
         snapshot_buffer, &snapshot_trigger,
-        audio_buffer, audio_buffer_size);
+        audio_buffer, audio_buffer_size, &audio_gain);
 
     auto time_scale = new float[block_size];
     const float Fs = 1e6;
@@ -309,6 +311,7 @@ int main(int argc, char** argv)
 
             ImGui::SliderFloat("Symbol frequency scaler", &demod.ted_clock.fcenter_factor, 0.0f, 2.0f);
             ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
+            ImGui::SliderInt("Audio gain", &audio_gain, 0, 128);
             ImGui::End();
         }
 
