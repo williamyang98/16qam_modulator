@@ -91,7 +91,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
     // Fs = 250e3;
     Fs = 2e6;
     Ts = 1.0f/Fs;
-    Fsymbol = 25e3;
+    Fsymbol = 50e3;
     Tsymbol = 1/Fsymbol;
     Nsymbol = (int)std::floorf(Fs/Fsymbol);
 

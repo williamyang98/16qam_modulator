@@ -146,7 +146,7 @@ int main(int argc, char** argv)
 
     auto render_buffer = demod_buffer;
 
-    const int audio_buffer_size = 5000;
+    const int audio_buffer_size = 10000;
     uint8_t audio_buffer[audio_buffer_size] = {0};
     int audio_gain = 16;
     

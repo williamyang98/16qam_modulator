@@ -114,18 +114,20 @@ int main(void)
 	//       Page 15 - Reset and Interrupt Handling - "The lower the address the higher is the priority level"
 	TCCR0A = (1 << WGM01);
 	TCCR0B = (1 << CS01); // Prescaler = 8
-	#if USE_16QAM
-	OCR0A = 79;			  // F = 25kHz
-	#else
 	OCR0A = 39;			  // F = 50kHz
-	#endif
 		
 	TIMSK0 = (1 << OCIE0A);
 	
 	// setup Timer 2 channel A for ADC sampling @ 5kHz ===> 5kB/s
+	// If we are using 16QAM we have double the bit rate
+	// Therefore we can double the ADC sampling rate
 	TCCR2A = (1 << WGM21);
 	TCCR2B = (1 << CS21) | (1 << CS20); // Prescaler = 32
+	#if USE_16QAM
+	OCR2A = 49;							// F = 10kHz
+	#else
 	OCR2A = 99;							// F = 5kHz
+	#end
 	TIMSK2 = (1 << OCIE2A);
 	
 	// ADC setup
@@ -184,7 +186,7 @@ int main(void)
 		int tx_buf_byte = 0;
 		tx_buf_byte += generate_packet(ADC_BUFFER_RD, ADC_BUFFER_SIZE, &tx_buf[tx_buf_byte]);
 		
-		// NOTE: message is preencoded to save performance
+		// NOTE: message is pre-encoded to save performance
 		// tx_buf_byte += generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[tx_buf_byte]);
 		
 		#if DEBUG_SIGNALS
@@ -229,6 +231,7 @@ ISR(TIMER0_COMPA_vect) {
 	
 	const uint8_t b = TX_BUFFER_RD[curr_tx_rd_byte];
 	
+	
 	#if USE_16QAM
 	PORTD = (b << tx_buffer_byte_shift) & 0b11110000;
 	tx_buffer_byte_shift += 4;
@@ -237,6 +240,7 @@ ISR(TIMER0_COMPA_vect) {
 		curr_tx_rd_byte++;
 	}
 	#else	
+	// If we are using 4QAM, we have 2 bits per symbol
 	const uint8_t i = (b >> tx_buffer_byte_shift) & 0b11;
 	PORTD = qam_data[i];
 	tx_buffer_byte_shift -= 2;
