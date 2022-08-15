@@ -22,6 +22,8 @@
 #define DEBUG_PIN_TRANSMIT	PORTB3 // pin 11	Pulse to keep track of time spent on transmit interrupt
 #define DEBUG_PIN_ADC		PORTB4 // pin 12	Pulse to keep track of time spent on ADC interrupt
 
+#define USE_16QAM 1
+
 
 // Constants used for our encoding pipeline
 const uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
@@ -70,7 +72,12 @@ volatile uint8_t* TX_BUFFER_WR = TX_BUFFER_0;
 volatile uint8_t* TX_BUFFER_RD = TX_BUFFER_1;
 volatile uint32_t curr_tx_rd_byte = 0;
 volatile uint8_t tx_buffer_wr_ready = 1;
+
+#if USE_16QAM
+int tx_buffer_byte_shift = 0;
+#else
 int tx_buffer_byte_shift = 6;
+#endif
 
 int generate_packet(uint8_t* x, const int N, uint8_t* y);
 
@@ -107,7 +114,12 @@ int main(void)
 	//       Page 15 - Reset and Interrupt Handling - "The lower the address the higher is the priority level"
 	TCCR0A = (1 << WGM01);
 	TCCR0B = (1 << CS01); // Prescaler = 8
+	#if USE_16QAM
+	OCR0A = 79;			  // F = 25kHz
+	#else
 	OCR0A = 39;			  // F = 50kHz
+	#endif
+		
 	TIMSK0 = (1 << OCIE0A);
 	
 	// setup Timer 2 channel A for ADC sampling @ 5kHz ===> 5kB/s
@@ -142,6 +154,13 @@ int main(void)
 	}
 	SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH-1] = 0;
 	
+	// NOTE: Pre-encode the message to save performance
+	{
+		int tx_buf_byte = 210;
+		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &TX_BUFFER_WR[tx_buf_byte]);
+		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &TX_BUFFER_RD[tx_buf_byte]);
+	}
+	
 	sei();
 	
     while (1) 
@@ -164,7 +183,9 @@ int main(void)
 		uint8_t* tx_buf = TX_BUFFER_WR;
 		int tx_buf_byte = 0;
 		tx_buf_byte += generate_packet(ADC_BUFFER_RD, ADC_BUFFER_SIZE, &tx_buf[tx_buf_byte]);
-		tx_buf_byte += generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[tx_buf_byte]);
+		
+		// NOTE: message is preencoded to save performance
+		// tx_buf_byte += generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[tx_buf_byte]);
 		
 		#if DEBUG_SIGNALS
 		DEBUG_PORT &= ~(1 << DEBUG_PIN_ENCODING);
@@ -207,14 +228,23 @@ ISR(TIMER0_COMPA_vect) {
 	#endif
 	
 	const uint8_t b = TX_BUFFER_RD[curr_tx_rd_byte];
+	
+	#if USE_16QAM
+	PORTD = (b << tx_buffer_byte_shift) & 0b11110000;
+	tx_buffer_byte_shift += 4;
+	if (tx_buffer_byte_shift == 8) {
+		tx_buffer_byte_shift = 0;
+		curr_tx_rd_byte++;
+	}
+	#else	
 	const uint8_t i = (b >> tx_buffer_byte_shift) & 0b11;
 	PORTD = qam_data[i];
 	tx_buffer_byte_shift -= 2;
-	
 	if (tx_buffer_byte_shift == -2) {
 		tx_buffer_byte_shift = 6;
 		curr_tx_rd_byte++;
 	}
+	#endif	
 	
 	// swap buffers when done
 	// raise flag for main loop to begin writing
