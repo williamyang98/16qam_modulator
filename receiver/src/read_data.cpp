@@ -38,6 +38,8 @@ int main(int argc, char **argv) {
     auto x_buffer = new std::complex<uint8_t>[block_size];
     auto y_buffer = new std::complex<float>[block_size];
 
+    demod.pll_mixer.fcenter = -1000;
+
     const int rx_buffer_size = 4096;
     auto frame_sync = FrameSynchroniser<uint32_t>(PREAMBLE_CODE, SCRAMBLER_CODE, CRC8_POLY, rx_buffer_size);
 
