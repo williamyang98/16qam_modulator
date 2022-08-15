@@ -15,9 +15,8 @@ Frame consists of the following:
 - Payload data in bytes: uint8*
 - CRC8 with polynomial 0xD5 calculated on just the payload data
 
-Currently the 16QAM modulator is just being used as a 4QAM moduluator since it is easier to implement.
 The symbol rate is 50kHz which gives 100kb/s or 12.5kB/s. 
-The ADC is being sampled at 5kHz which produces 5kB/s of raw 8bit audio data.
+The ADC is being sampled at 10kHz which produces 10kB/s of raw 8bit audio data.
 
 With the encoding scheme we are transmitting at 50Hz:
 1. Audio data block: 100B raw ==> 210B encoded
@@ -26,7 +25,7 @@ With the encoding scheme we are transmitting at 50Hz:
 250B at 50Hz is 12.5kB/s which matches our symbol rate.
 
 The reason why we are polling the ADC so slowly is because the ISR used for symbol transmit can only go up to 50kHz.
-This results in extreme amounts of aliasing in the sampled audio. This could be improved in the future by optimising the ISR.
+This results in extreme amounts of aliasing in the sampled audio. This could be improved in the future by optimising the ISR or using a faster micro.
 
 ## Transmitter circuit
 Uses the 74HC86 XOR as the modulator and a discrete current feedback amplifier for amplification and buffering.
@@ -55,7 +54,6 @@ Change the ImDrawIdx to unsigned int since ImPlot will exceed the vertex count l
   - Improve the design of the TED and carrier PLL with better loop filters
   - Add a CIC upsampling filter to improve the timing error detector
   - Add coarse frequency correction
-- Get 16QAM working after demodulator is improved
 - Build a proper circuit board 
 - Experiment with using the STM32F401 which is much faster than the ATmega328p
 - Improve software quality in general
