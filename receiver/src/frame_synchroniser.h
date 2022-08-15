@@ -10,6 +10,10 @@
 #include "encoding.h"
 #include "additive_scrambler.h"
 
+#include "constellation.h"
+
+#define USE_16QAM 1
+
 // shift register which searches for preamble sequence
 template <typename T>
 class PreambleFilter {
@@ -138,17 +142,42 @@ public:
         return state;
     }
 private:
+    uint8_t symbol_to_bits(const std::complex<float>IQ) {
+        uint8_t sym  = 0;
+
+        #if !USE_16QAM
+        sym |= (IQ.real() > 0.0f) ? 0b10 : 0b00;
+        sym |= (IQ.imag() > 0.0f) ? 0b01 : 0b00;
+        #else 
+
+        float min_err = INFINITY;
+        uint8_t best_match = 0;
+
+        for (uint8_t i = 0; i < QAM_Constellation_Size; i++) {
+            auto err_vec = QAM_Constellation[i]-IQ;
+            auto err = std::abs(err_vec);
+            if (err < min_err) {
+                best_match = i;
+                min_err = err;
+            }
+        }
+
+        sym = best_match;
+
+        #endif
+
+        return sym;
+    }
+
     ProcessResult process_await_preamble(const std::complex<float> IQ) {
         int total_preambles_found = 0;
 
         bits_since_preamble += 2;
         for (int i = 0; i < 4; i++) {
             auto IQ_phi = IQ * preamble_mixers[i];
-            uint8_t sym  = 0;
-            sym |= (IQ_phi.real() > 0.0f) ? 0b10 : 0b00;
-            sym |= (IQ_phi.imag() > 0.0f) ? 0b01 : 0b00;
+            auto sym = symbol_to_bits(IQ_phi);
 
-            const bool res = preamble_filters[i].process(sym);
+            const bool res = preamble_filters[i].process(sym, 4);
             if (!res) {
                 continue;
             }
@@ -247,22 +276,30 @@ private:
 
     void process_decoder_symbol(const std::complex<float>IQ) {
         const auto IQ_phi = IQ * preamble_mixers[preamble_state.selected_phase];
-        uint8_t sym  = 0;
-        sym |= (IQ_phi.real() > 0.0f) ? 0b10 : 0b00;
-        sym |= (IQ_phi.imag() > 0.0f) ? 0b01 : 0b00;
+        auto sym = symbol_to_bits(IQ_phi);
 
         if (encoded_bits == 0) {
             descramble_buffer[encoded_bytes] = 0;
         }
 
+        #if !USE_16QAM
         descramble_buffer[encoded_bytes] |= (sym << (6-encoded_bits));
         encoded_bits += 2;
-
         if (encoded_bits == 8) {
             encoded_bits = 0;
             encoded_buffer[encoded_bytes] = descrambler.process(descramble_buffer[encoded_bytes]);
             encoded_bytes += 1;
         }
+        #else
+        descramble_buffer[encoded_bytes] |= (sym << (4-encoded_bits));
+        encoded_bits += 4;
+        if (encoded_bits == 8) {
+            encoded_bits = 0;
+            encoded_buffer[encoded_bytes] = descrambler.process(descramble_buffer[encoded_bytes]);
+            encoded_bytes += 1;
+        }
+
+        #endif
     }
 
     void reset_decoders() {

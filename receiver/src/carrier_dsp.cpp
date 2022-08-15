@@ -15,9 +15,8 @@ constexpr float PI = (float)M_PI;
 // 50kHz cutoff
 // constexpr float FIR1_TAP_B[] = {-1.24137345828279e-18f,-0.0126419757368433f,-0.0246922577087696f,0.0635051299460375f,0.274797751173244f,0.398062704652663f,0.274797751173244f,0.0635051299460375f,-0.0246922577087696f,-0.0126419757368433f,-1.24137345828279e-18f};
 // 62.5kHz @ Fs=2MHz cutoff
-// constexpr float FIR1_TAP_B[] = {0.00701891326561467f,0.0116587959676490f,0.0246187865230115f,0.0451889289532004f,0.0704801267453563f,0.0960007748441594f,0.116717378951263f,0.128316294749745f,0.128316294749745f,0.116717378951263f,0.0960007748441594f,0.0704801267453563f,0.0451889289532004f,0.0246187865230115f,0.0116587959676490f,0.00701891326561467f};
+constexpr float FIR1_TAP_B[] = {0.00701891326561467f,0.0116587959676490f,0.0246187865230115f,0.0451889289532004f,0.0704801267453563f,0.0960007748441594f,0.116717378951263f,0.128316294749745f,0.128316294749745f,0.116717378951263f,0.0960007748441594f,0.0704801267453563f,0.0451889289532004f,0.0246187865230115f,0.0116587959676490f,0.00701891326561467f};
 // constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-
 // 100kHz @ Fs=2MHz cutoff
 // constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
 // constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
@@ -27,14 +26,14 @@ constexpr float PI = (float)M_PI;
 // 400kHz @ Fs=2MHz cutoff
 // constexpr float FIR1_TAP_B[] = {1.24593522022721e-18f,0.00557150275358611f,0.00788955841781937f,-0.0165219973844350f,-0.0508056027127646f,1.19921264946869e-17f,0.183871713137048f,0.369994825788746f,0.369994825788746f,0.183871713137048f,1.19921264946869e-17f,-0.0508056027127646f,-0.0165219973844350f,0.00788955841781937f,0.00557150275358611f,1.24593522022721e-18f};
 // constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-
 // 50kHz @ Fs=1MHz cutoff
-constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
+// constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
 constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
 
 // ac coupling filter
 constexpr float IIR1_TAP_B[] = {1.0f, -1.0f};
-constexpr float IIR1_TAP_A[] = {1.0f, -0.9995f};
+// constexpr float IIR1_TAP_A[] = {1.0f, -0.9995f};
+constexpr float IIR1_TAP_A[] = {1.0f, -0.99999f};
 constexpr int IIR1_TAP_ORDER = sizeof(IIR1_TAP_A) / sizeof(float);
 
 // pll phase error first order butterworth filter
@@ -46,18 +45,21 @@ constexpr int IIR1_TAP_ORDER = sizeof(IIR1_TAP_A) / sizeof(float);
 // constexpr float IIR2_TAP_A[] = {1.0f,-0.881618592363189f};
 
 // 5kHz @ Fs=2MHz Butterworth N=1 lpf
-// constexpr float IIR2_TAP_B[] = {0.00779293629195155f,0.00779293629195155f};
-// constexpr float IIR2_TAP_A[] = {1.0f,-0.984414127416097f};
+constexpr float IIR2_TAP_B[] = {0.00779293629195155f,0.00779293629195155f};
+constexpr float IIR2_TAP_A[] = {1.0f,-0.984414127416097f};
+// 2kHz @ Fs=2MHz Butterworth N=1 lpf
+// constexpr float IIR2_TAP_B[] = {0.00313176422919270f,0.00313176422919270f};
+// constexpr float IIR2_TAP_A[] = {1.0f,-0.993736471541615f};
 
 // 2kHz @ Fs=1MHz Butterworth N=1 lpf
-constexpr float IIR2_TAP_B[] = {0.00624403504634286f,0.00624403504634286f};
-constexpr float IIR2_TAP_A[] = {1.0f,-0.987511929907314f};
+// constexpr float IIR2_TAP_B[] = {0.00624403504634286f,0.00624403504634286f};
+// constexpr float IIR2_TAP_A[] = {1.0f,-0.987511929907314f};
 const int IIR2_TAP_ORDER = sizeof(IIR2_TAP_A) / sizeof(float);
 
 // ted phase error fir filter
 // 50kHz filter @ Fs=2MHz
-// const float IIR3_TAP_B[] = {0.0729596572682667f,0.0729596572682667f};
-// const float IIR3_TAP_A[] = {1.0f,-0.854080685463467f};
+const float IIR3_TAP_B[] = {0.0729596572682667f,0.0729596572682667f};
+const float IIR3_TAP_A[] = {1.0f,-0.854080685463467f};
 // 10kHz filter @ Fs=2MHz
 // const float IIR3_TAP_B[] = {0.0154662914031034f,0.0154662914031034f};
 // const float IIR3_TAP_A[] = {1.0f,-0.969067417193793f};
@@ -65,14 +67,11 @@ const int IIR2_TAP_ORDER = sizeof(IIR2_TAP_A) / sizeof(float);
 // const float IIR3_TAP_B[] = {0.0304687470912538f,0.0304687470912538f};
 // const float IIR3_TAP_A[] = {1.0f,-0.939062505817492f};
 // 50kHz filter @ Fs=1MHz
-const float IIR3_TAP_B[] = {0.136728735997320f,0.136728735997320f};
-const float IIR3_TAP_A[] = {1.0f,-0.726542528005361f};
+// const float IIR3_TAP_B[] = {0.136728735997320f,0.136728735997320f};
+// const float IIR3_TAP_A[] = {1.0f,-0.726542528005361f};
 const int IIR3_TAP_ORDER = sizeof(IIR3_TAP_B) / sizeof(float);
 
-// our reference constellation for a 1W signal
-constexpr std::complex<float> QAM_Constellation[] = {{0.707f,0.707f},{0.707f,-0.707f},{-0.707f,0.707f},{-0.707f,-0.707f}};
-constexpr int QAM_Constellation_Size = sizeof(QAM_Constellation) / sizeof(std::complex<float>);
-constexpr float QAM_Constellation_Average_Power = 1.0f;
+#include "constellation.h"
 
 constexpr int INTEGRATE_DUMP_DELAY_SAMPLES = 5;
 
@@ -90,15 +89,25 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
 
     // calculate constants
     // Fs = 250e3;
-    Fs = 1e6;
+    Fs = 2e6;
     Ts = 1.0f/Fs;
-    Fsymbol = 50e3;
+    Fsymbol = 25e3;
     Tsymbol = 1/Fsymbol;
     Nsymbol = (int)std::floorf(Fs/Fsymbol);
 
     // setup our control loop
-    filter_agc.target_power = QAM_Constellation_Average_Power;
-    filter_agc.beta = 0.10f;
+    // filter_agc.target_power = QAM_Constellation_Average_Power;
+    {
+        float avg_power = 0.0f;
+        for (int i = 0; i < QAM_Constellation_Size; i++) {
+            float I = QAM_Constellation[i].real();
+            float Q = QAM_Constellation[i].imag();
+            avg_power += (I*I + Q*Q);
+        }
+        avg_power = avg_power / (float)(QAM_Constellation_Size);
+        filter_agc.target_power = avg_power;
+    }
+    filter_agc.beta = 0.05f;
     filter_agc.current_gain = 0.1f;
 
     pll_mixer.integrator.KTs = Ts;
@@ -108,7 +117,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
 
     ted_clock.integrator.KTs = Ts;
     ted_clock.fcenter = Fsymbol;
-    ted_clock.fgain = -5e3;
+    ted_clock.fgain = -10e3;
 
     zcd_cooldown.N_cooldown = (int)std::floorf(Nsymbol*0.5f);
 
@@ -124,6 +133,7 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
 {
     //TODO: test variables
     float thresh_acquire_error = 0.3f; // max distance allowed for a valid symbol reading
+    const bool use_all_points = false;
 
     int total_symbols = 0;
 
@@ -199,7 +209,7 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
         // NOTE: if we do not have an integrator+dump output, we will still try to estimate a symbol
         // this is because introducing the zero-order hold filter from the integrate+dump
         // will produce phase noise in the PLL due to the one symbol delay 
-        } else {
+        } else if (use_all_points) {
             const auto A = std::abs(IQ_pll);
             if (A > 0.4) {
                 auto res = estimate_phase_error(IQ_pll, QAM_Constellation, QAM_Constellation_Size);
@@ -210,7 +220,8 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
         }
 
         // pass new pll phase error through first order butterworth filter
-        pll_error_lpf.process(&pll_phase_error, &pll_mixer.phase_error, 1);
+        // pll_error_lpf.process(&pll_phase_error, &pll_mixer.phase_error, 1);
+        pll_mixer.phase_error = pll_phase_error;
 
         // place all of our data into the buffer
         buffers->x_pll_out[i] = IQ_pll;

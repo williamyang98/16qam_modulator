@@ -23,7 +23,7 @@
 #include "carrier_dsp.h"
 #include "frame_synchroniser.h"
 
-#define PRINT_LOG 0
+#define PRINT_LOG 1
 #if PRINT_LOG 
   #define LOG_MESSAGE(...) fprintf(stderr, ##__VA_ARGS__)
 #else
@@ -134,8 +134,10 @@ int main(int argc, char** argv)
         fp_in = tmp;
     }
 
-    const int block_size = 4096;
+    // const int block_size = 4096;
+    const int block_size = 8192;
     CarrierToSymbolDemodulator demod(block_size);
+    demod.pll_mixer.fcenter = -1000; // NOTE: we are doing this because our loop filter doesnt have an integral term
 
     // swap between live and snapshot buffer
     auto demod_buffer = demod.buffers;
