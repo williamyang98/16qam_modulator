@@ -53,13 +53,19 @@ public:
     AGC_Filter<std::complex<float>> filter_agc;
     // phase locked loop
     PLL_mixer pll_mixer;
+    float pll_error_prev;
     IIR_Filter<float> pll_error_lpf;
+    Integrator_Block<float> pll_error_int;
     // timing error detector
     TED_Clock ted_clock;
+    float ted_error_prev;
     IIR_Filter<float> ted_error_lpf;
+    Integrator_Block<float> ted_error_int;
     // zero crossing detectors
-    Zero_Crossing_Detector I_zcd;
-    Zero_Crossing_Detector Q_zcd;
+    // Zero_Crossing_Detector I_zcd;
+    // Zero_Crossing_Detector Q_zcd;
+    N_Level_Crossing_Detector I_zcd;
+    N_Level_Crossing_Detector Q_zcd;
     Trigger_Cooldown zcd_cooldown;
     // integrate and dump filter
     Delay_Line integrate_dump_trigger_delay_line;
