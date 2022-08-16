@@ -175,8 +175,9 @@ int main(int argc, char** argv) {
                             auto dt_curr_tx = std::chrono::high_resolution_clock::now();
                             const auto dt = std::chrono::duration_cast<std::chrono::microseconds>(dt_curr_tx-dt_prev_tx);
                             int T_offset =  static_cast<int>(dt.count());
+                            int delay = T_offset - T_block_microseconds;
                             dt_prev_tx = dt_curr_tx;
-                            std::this_thread::sleep_for(std::chrono::microseconds(T_block_microseconds - T_offset));
+                            std::this_thread::sleep_for(std::chrono::microseconds((T_block_microseconds - delay)/2));
                         // if this isn't real time, we will impose a time recording limit
                         } else {
                             if (curr_block >= N_blocks) {
