@@ -38,9 +38,17 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
+int is_main_window_focused = true;
+
 static void glfw_error_callback(int error, const char* description)
 {
     LOG_MESSAGE("Glfw Error %d: %s\n", error, description);
+}
+
+// this occurs when we minimise or change focus to another window
+static void glfw_window_focus_callback(GLFWwindow* window, int focused)
+{
+    is_main_window_focused = focused;
 }
 
 void demodulator_thread(
@@ -62,7 +70,7 @@ void demodulator_thread(
     int curr_audio_buffer_index = 0;
 
     float* audio_filter_buffer = new float[audio_buffer_size];
-    uint16_t* pcm_buffer = new uint16_t[audio_buffer_size];
+    int16_t* pcm_buffer = new int16_t[audio_buffer_size];
 
     auto payload_handler = [&pcm_buffer, &audio_buffer, &curr_audio_buffer_index, audio_buffer_size, &audio_gain](uint8_t* x, const uint16_t N) {
         // if not an audio block
@@ -79,14 +87,11 @@ void demodulator_thread(
 
             // amplify the signal
             int16_t v0 = static_cast<int16_t>(v);
-            v0 = v0-127;
+            v0 = v0 - 128;
             v0 = v0 * (*audio_gain);
-            v0 = v0 + (1u << 8);
-            uint16_t v1 = (uint16_t)(v0);
-            v1 = v1 * 2;
-            pcm_buffer[i] = (uint16_t)(v1);
+            pcm_buffer[i] = v0;
         }
-        fwrite(pcm_buffer, sizeof(uint16_t), N, stdout);
+        fwrite(pcm_buffer, sizeof(int16_t), N, stdout);
     };
 
     size_t rd_block_size = 0;
@@ -137,7 +142,6 @@ int main(int argc, char** argv)
     // const int block_size = 4096;
     const int block_size = 8192;
     CarrierToSymbolDemodulator demod(block_size);
-    demod.pll_mixer.fcenter = -1000; // NOTE: we are doing this because our loop filter doesnt have an integral term
 
     // swap between live and snapshot buffer
     auto demod_buffer = demod.buffers;
@@ -202,6 +206,8 @@ int main(int argc, char** argv)
     if (window == NULL) {
         return 1;
     }
+
+    glfwSetWindowFocusCallback(window, glfw_window_focus_callback);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // Enable vsync
 
@@ -274,6 +280,11 @@ int main(int argc, char** argv)
         // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
         glfwPollEvents();
 
+        if (!is_main_window_focused) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            continue;
+        }
+
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -320,15 +331,16 @@ int main(int argc, char** argv)
 
         ImGui::Begin("Constellation");
         if (ImPlot::BeginPlot("##Constellation", ImVec2(-1,0), ImPlotFlags_Equal)) {
-            ImPlot::SetupAxisLimits(ImAxis_X1, -15, 15, ImPlotCond_Once);
             {
                 auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out);
                 ImPlot::PlotScatter("IQ demod", &buffer[0], &buffer[1], block_size, 0, 0, 2*sizeof(float));
+                ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
             }
             {
                 auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out);
                 ImPlot::HideNextItem(true, ImPlotCond_Once);
                 ImPlot::PlotScatter("IQ raw", &buffer[0], &buffer[1], block_size, 0, 0, 2*sizeof(float));
+                ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
             }
             ImPlot::EndPlot();
         }
