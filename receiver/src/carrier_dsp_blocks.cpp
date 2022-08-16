@@ -159,3 +159,31 @@ bool Delay_Line::process(void) {
     }
     return trig_out;
 }
+
+N_Level_Crossing_Detector::N_Level_Crossing_Detector(const float* _levels, const int _N)
+: N(_N)
+{
+    levels = new float[N];
+    curr_level = 0;
+    for (int i = 0; i < N; i++) {
+        levels[i] = _levels[i];
+    }
+}
+
+N_Level_Crossing_Detector::~N_Level_Crossing_Detector() {
+    delete [] levels;
+}
+
+bool N_Level_Crossing_Detector::process(const float x) {
+    int new_level = curr_level;
+    for (int i = 0; i < N; i++) {
+        if (x > levels[i]) {
+            new_level = i;
+            break;
+        }
+    }
+
+    bool is_crossed = (new_level != curr_level);
+    curr_level = new_level;
+    return is_crossed;
+}

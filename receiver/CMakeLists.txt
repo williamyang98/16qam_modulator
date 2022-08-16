@@ -30,8 +30,15 @@ add_executable(simulate_transmitter
 include_directories(simulate_transmitter src/ src/getopt/)
 set_target_properties(simulate_transmitter PROPERTIES CXX_STANDARD 17)
 
+add_executable(replay_data
+    src/replay_data.cpp
+    src/getopt/getopt.c)
+include_directories(replay_data src/ src/getopt)
+set_target_properties(replay_data PROPERTIES CXX_STANDARD 17)
+
 if (WIN32)
 target_compile_options(read_data PRIVATE "/MP")
 target_compile_options(view_data PRIVATE "/MP")
 target_compile_options(simulate_transmitter PRIVATE "/MP")
+target_compile_options(replay_data PRIVATE "/MP")
 endif (WIN32)

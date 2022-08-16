@@ -61,6 +61,19 @@ public:
     bool process(const float x);
 };
 
+class N_Level_Crossing_Detector
+{
+public:
+    float* levels;
+    const int N;
+private:
+    int curr_level;
+public:
+    N_Level_Crossing_Detector(const float* _levels, const int _N);
+    ~N_Level_Crossing_Detector();
+    bool process(const float x);
+};
+
 // prevent trigger from refiring too quickly
 class Trigger_Cooldown 
 {
