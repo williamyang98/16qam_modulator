@@ -218,7 +218,9 @@ private:
 
     void flush_tracebacks(uint8_t* y, int& curr_y_bit) {
         // perform traceback
-        uint8_t curr_state = find_best_state();
+        // uint8_t curr_state = find_best_state();
+        // with trellis termination, we always start at state 0 when flushing
+        uint8_t curr_state = 0;
         for (int i = 0; i < nb_paths_stored; i++) {
             const auto step = (nb_traceback+curr_step-i) % nb_traceback;
             const auto index = get_index(step, curr_state);
