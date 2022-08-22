@@ -22,9 +22,6 @@
 #define DEBUG_PIN_TRANSMIT	PORTB3 // pin 11	Pulse to keep track of time spent on transmit interrupt
 #define DEBUG_PIN_ADC		PORTB4 // pin 12	Pulse to keep track of time spent on ADC interrupt
 
-#define USE_16QAM 1
-
-
 // Constants used for our encoding pipeline
 const uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
 const uint16_t SCRAMBLER_CODE = 0b1000010101011001;
@@ -35,22 +32,24 @@ const uint8_t CRC8_POLY = 0xD5;
 const uint8_t qam_data[4] = {0b00000000, 0b11000000, 0b00110000, 0b11110000};
 
 // Formula for encoded frame size
-// M = 2*(N+2+1) + 4
-// M = 2*N+10
+// N (payload), 2 (length), 1 (crc8), 1 (zero byte for trellis terminator)
+// M = 2*(N+2+1+1) + 4
+// M = 2*N+12
 
 #define ADC_BUFFER_SIZE 100
-// ADC frame is 210B
-#define ADC_ENC_FRAME_SIZE ((ADC_BUFFER_SIZE+2+1)*2 + 4)
+// ADC frame is 212B
+#define ADC_ENC_FRAME_SIZE ((ADC_BUFFER_SIZE+2+1+1)*2 + 4)
 
-// Message frame is 40B
-#define SAMPLE_MESSAGE_LENGTH 15
-#define MESSAGE_ENC_FRAME_SIZE ((SAMPLE_MESSAGE_LENGTH+2+1)*2 + 4)
+// Message frame is 38B
+#define SAMPLE_MESSAGE_LENGTH 13
+#define MESSAGE_ENC_FRAME_SIZE ((SAMPLE_MESSAGE_LENGTH+2+1+1)*2 + 4)
 
 // Each frame transmitted at 250B blocks
-// ADC frame is 210B
-// Message frame is 40B
+// ADC frame is 212B
+// Message frame is 38B
 // We want to fit 1 audio frame and some extra data
-#define TX_BUFFER_SIZE 250
+// NOTE: We are unpacking the data into 4 bit chunks so the transmit ISR will run faster
+#define TX_BUFFER_SIZE 250*2
 
 // Our extra data frame
 uint8_t SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH] = {0};
@@ -59,6 +58,7 @@ uint8_t SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH] = {0};
 uint8_t ADC_BUFFER_0[ADC_BUFFER_SIZE] = {0};
 uint8_t ADC_BUFFER_1[ADC_BUFFER_SIZE] = {0};
 
+// Offset of 2 bytes for the uint16_t length field
 volatile uint8_t* ADC_BUFFER_WR = ADC_BUFFER_0;
 volatile uint8_t* ADC_BUFFER_RD = ADC_BUFFER_1;
 volatile int curr_adc_wr_byte = 0;
@@ -67,30 +67,25 @@ volatile uint8_t adc_buffer_rd_ready = 1;
 // Encoding and transmit buffers
 uint8_t TX_BUFFER_0[TX_BUFFER_SIZE] = {0};
 uint8_t TX_BUFFER_1[TX_BUFFER_SIZE] = {0};
-	
+uint8_t TX_BUFFER_PACKED[TX_BUFFER_SIZE/2] = {0};
+
 volatile uint8_t* TX_BUFFER_WR = TX_BUFFER_0;
 volatile uint8_t* TX_BUFFER_RD = TX_BUFFER_1;
 volatile uint32_t curr_tx_rd_byte = 0;
 volatile uint8_t tx_buffer_wr_ready = 1;
 
-#if USE_16QAM
-int tx_buffer_byte_shift = 0;
-#else
-int tx_buffer_byte_shift = 6;
-#endif
+// Unpack preamble code into 4bit chunks for 16QAM 
+#define PREAMBLE_UNPACKED_SIZE 8
+uint8_t PREAMBLE_CODE_UNPACKED[PREAMBLE_UNPACKED_SIZE] = {0};
+
+// Do as much preencoding as possible to reduce overhead
+void generate_preencodings();
 
 int generate_packet(uint8_t* x, const int N, uint8_t* y);
+static inline void write_adc_buffer();
+static inline void read_transmit_buffer();
 
-int main(void)
-{
-	cli();
-	
-	// setup buffers
-	TX_BUFFER_WR = TX_BUFFER_0;
-	TX_BUFFER_RD = TX_BUFFER_1;
-	ADC_BUFFER_WR = ADC_BUFFER_0;
-	ADC_BUFFER_RD = ADC_BUFFER_1;
-	
+void init(void) {
 	// Timer 1 channels A and B for quadrature 4MHz carrier
 	// Port B is pins 8 to 13
 	// Pin 8 = DDRB0
@@ -114,8 +109,15 @@ int main(void)
 	//       Page 15 - Reset and Interrupt Handling - "The lower the address the higher is the priority level"
 	TCCR0A = (1 << WGM01);
 	TCCR0B = (1 << CS01); // Prescaler = 8
-	OCR0A = 39;			  // F = 50kHz
-		
+	//OCR0A = 39;			  // F = 50kHz
+	//OCR0A = 27;			  // F = 71.43kHz
+	//OCR0A = 23;			  // F = 83.33kHz
+	OCR0A = 22;			  // F = 86.956kHz
+	//OCR0A = 21;			  // F = 90.90kHz
+	//OCR0A = 20;			  // F = 95.23kHz
+	//OCR0A = 19;			  // F = 100kHz
+	
+	
 	TIMSK0 = (1 << OCIE0A);
 	
 	// setup Timer 2 channel A for ADC sampling @ 5kHz ===> 5kB/s
@@ -123,21 +125,30 @@ int main(void)
 	// Therefore we can double the ADC sampling rate
 	TCCR2A = (1 << WGM21);
 	TCCR2B = (1 << CS21) | (1 << CS20); // Prescaler = 32
-	#if USE_16QAM
-	OCR2A = 49;							// F = 10kHz
-	#else
-	OCR2A = 99;							// F = 5kHz
-	#end
-	TIMSK2 = (1 << OCIE2A);
+	//OCR2A = 49;							// F = 10kHz
+	OCR2A = 34;							// F = 14.285kHz
+	//TIMSK2 = (1 << OCIE2A);
 	
 	// ADC setup
 	// ADLAR = 8bit mode
 	// REFS0 = AVcc
 	// MUX3:MUX0 = 0 for ADC0
-	ADMUX = (1 << ADLAR) | (1 << REFS0);	
-	// Set ADC clock prescaler to 64
-	ADCSRA = (1 << ADPS2) | (1 << ADPS1);
+	ADMUX = (1 << ADLAR) | (1 << REFS0);
+	// ADC_CLOCK = FCPU / PRESCALER
+	// For Fs = 20kHz (worst case)
+	// Takes 13 clock cycles normally, but up to 25 cycles worst case if ADEN is started at unfortuante timing
+	// ADC_CLOCK = Fs * 25 = 500kHz
+	// Therefore the prescaler upper bound is FCPU/ADC_CLOCK = 32
+	ADCSRA = (1 << ADPS2) | (1 << ADPS0); // prescaler 32
 	ADCSRA |= (1 << ADEN);	// enable adc
+}
+
+int main(void)
+{
+	cli();
+	
+	// Setup IO, timers, clocks, interrupts, peripherals, etc...
+	init();
 	
 	// Initialise our encoding pipeline	
 	crc8_generate_table(CRC8_POLY);
@@ -150,21 +161,13 @@ int main(void)
 	curr_adc_wr_byte = 0;
 	adc_buffer_rd_ready = 1;
 	
-	// Store a sample message in our misc data buffer
-	for (int i = 0; i < SAMPLE_MESSAGE_LENGTH; i++) {
-		SAMPLE_MESSAGE[i] = 'A' + i;
-	}
-	SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH-1] = 0;
-	
-	// NOTE: Pre-encode the message to save performance
-	{
-		int tx_buf_byte = 210;
-		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &TX_BUFFER_WR[tx_buf_byte]);
-		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &TX_BUFFER_RD[tx_buf_byte]);
-	}
+	// Do all our pre-encoded calculations
+	generate_preencodings();
 	
 	sei();
 	
+	// Real time encoding 
+	// This is triggered by flags from ISR for symbol transmit and ADC sampling
     while (1) 
     {
 		// Busy wait until ADC and transmit buffers are ready via flags
@@ -183,11 +186,8 @@ int main(void)
 		// Create our packets
 		// NOTE: This cannot take too long otherwise we have a half-written packet used for transmit
 		uint8_t* tx_buf = TX_BUFFER_WR;
-		int tx_buf_byte = 0;
-		tx_buf_byte += generate_packet(ADC_BUFFER_RD, ADC_BUFFER_SIZE, &tx_buf[tx_buf_byte]);
-		
-		// NOTE: message is pre-encoded to save performance
-		// tx_buf_byte += generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[tx_buf_byte]);
+		generate_packet(ADC_BUFFER_RD, ADC_BUFFER_SIZE, &tx_buf[0]);
+		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[ADC_ENC_FRAME_SIZE*2]);
 		
 		#if DEBUG_SIGNALS
 		DEBUG_PORT &= ~(1 << DEBUG_PIN_ENCODING);
@@ -195,60 +195,107 @@ int main(void)
     }
 }
 
-// Our encoding pipeline
-int generate_packet(uint8_t* x, const int N, uint8_t* y) {
-	conv_enc_reset();
-	scrambler_reset();
-	uint8_t crc8 = crc8_calculate(x, N);
-	uint16_t len = (uint16_t)(N);
-	
-	int offset = 0;
-	y[0] = (PREAMBLE_CODE >> 24) & 0xFF;
-	y[1] = (PREAMBLE_CODE >> 16) & 0xFF;
-	y[2] = (PREAMBLE_CODE >> 8 ) & 0xFF;
-	y[3] = (PREAMBLE_CODE      ) & 0xFF;
-	offset += 4;
-	
-	const int scrambler_start = offset;
-	offset += conv_enc_process((uint8_t*)(&len),	&y[offset], 2);
-	offset += conv_enc_process(x,					&y[offset], N);
-	offset += conv_enc_process(&crc8,				&y[offset], 1);
-
-	const int scrambler_end = offset;
-	for (int i = scrambler_start; i < scrambler_end; i++) {
-		y[i] = scrambler_process(y[i]);
+// Pre-encode as much as possible prior to real-time encoding
+void generate_preencodings() {
+	// Unpack preamble into 4bit chunks for 16QAM
+	for (int i = 0; i < PREAMBLE_UNPACKED_SIZE; i++) {
+		const int shift = (PREAMBLE_UNPACKED_SIZE-1-i)*4;
+		PREAMBLE_CODE_UNPACKED[i] = ((PREAMBLE_CODE >> shift) & 0x0F) << 4;
 	}
 	
-	return offset;
+	// Copy preamble code into known locations
+	{
+		const int audio_offset = 0;
+		const int metadata_offset = ADC_ENC_FRAME_SIZE*2;
+		for (int i = 0; i < PREAMBLE_UNPACKED_SIZE; i++) {
+			TX_BUFFER_WR[audio_offset+i] = PREAMBLE_CODE_UNPACKED[i];
+			TX_BUFFER_RD[audio_offset+i] = PREAMBLE_CODE_UNPACKED[i];
+			TX_BUFFER_WR[metadata_offset+i] = PREAMBLE_CODE_UNPACKED[i];
+			TX_BUFFER_RD[metadata_offset+i] = PREAMBLE_CODE_UNPACKED[i];
+		}
+	}
+	
+	// Store a sample message in our misc data buffer
+	{
+		for (int i = 0; i < SAMPLE_MESSAGE_LENGTH; i++) {
+			SAMPLE_MESSAGE[i] = 'A' + i;
+		}
+		SAMPLE_MESSAGE[SAMPLE_MESSAGE_LENGTH-1] = 0;
+	}
+	
+	// NOTE: pre-encoded metadata packet
+	{
+		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &TX_BUFFER_WR[ADC_ENC_FRAME_SIZE*2]);
+		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &TX_BUFFER_RD[ADC_ENC_FRAME_SIZE*2]);
+	}
 }
 
+// Our encoding pipeline
+int generate_packet(uint8_t* x, const int N, uint8_t* y0) {
+	conv_enc_reset();
+	scrambler_reset();
+	
+	// We cast this to uint16_t so we can write the trellis terminator along with it
+	// NOTE: this uses a big endian notation so the null byte is located correctly without a shift
+	uint16_t crc8 = (uint16_t)crc8_calculate(x, N);
+	uint16_t len = (uint16_t)(N);
+	uint8_t* y = TX_BUFFER_PACKED;
+	
+	
+	int offset = 0;
+	// NOTE: We are generating this before hand to save a few instructions
+	//y[0] = (PREAMBLE_CODE >> 24) & 0xFF;
+	//y[1] = (PREAMBLE_CODE >> 16) & 0xFF;
+	//y[2] = (PREAMBLE_CODE >> 8 ) & 0xFF;
+	//y[3] = (PREAMBLE_CODE      ) & 0xFF;
+	//offset += 4;
+	
+	// Encode then scramble the output
+	offset += conv_enc_process((uint8_t*)(&len),	&y[offset], 2);
+	offset += conv_enc_process(x,					&y[offset], N);
+	offset += conv_enc_process(&crc8,				&y[offset], 2);
+	//offset += conv_enc_process(&trellis_terminator,	&y[offset], 1);
+	
+	// Scramble and unpack into 4bit symbol chunks
+	int k = PREAMBLE_UNPACKED_SIZE;
+	for (int i = 0; i < offset; i++) {
+		uint8_t b = scrambler_process(y[i]);
+		y0[k] = b;
+		k = k+1;
+		y0[k] = b << 4;
+		k = k+1;
+	}
+	
+	return PREAMBLE_UNPACKED_SIZE + offset*2;
+}
 
-// symbol transmitter
-ISR(TIMER0_COMPA_vect) {
+void write_adc_buffer() {
+	#if DEBUG_SIGNALS
+	DEBUG_PORT |= (1 << DEBUG_PIN_ADC);
+	#endif
+	
+	ADC_BUFFER_WR[curr_adc_wr_byte++] = ADCH;
+	ADCSRA |= (1 << ADSC); // take a single conversion
+	
+	if (curr_adc_wr_byte == ADC_BUFFER_SIZE) {
+		curr_adc_wr_byte = 0;
+		uint8_t* tmp = ADC_BUFFER_RD;
+		ADC_BUFFER_RD = ADC_BUFFER_WR;
+		ADC_BUFFER_WR = tmp;
+		adc_buffer_rd_ready = 1;
+	}
+	
+	#if DEBUG_SIGNALS
+	DEBUG_PORT &= ~(1 << DEBUG_PIN_ADC);
+	#endif
+}
+
+void read_transmit_buffer() {
 	#if DEBUG_SIGNALS
 	DEBUG_PORT |= (1 << DEBUG_PIN_TRANSMIT);
 	#endif
 	
-	const uint8_t b = TX_BUFFER_RD[curr_tx_rd_byte];
-	
-	
-	#if USE_16QAM
-	PORTD = (b << tx_buffer_byte_shift) & 0b11110000;
-	tx_buffer_byte_shift += 4;
-	if (tx_buffer_byte_shift == 8) {
-		tx_buffer_byte_shift = 0;
-		curr_tx_rd_byte++;
-	}
-	#else	
-	// If we are using 4QAM, we have 2 bits per symbol
-	const uint8_t i = (b >> tx_buffer_byte_shift) & 0b11;
-	PORTD = qam_data[i];
-	tx_buffer_byte_shift -= 2;
-	if (tx_buffer_byte_shift == -2) {
-		tx_buffer_byte_shift = 6;
-		curr_tx_rd_byte++;
-	}
-	#endif	
+	PORTD = TX_BUFFER_RD[curr_tx_rd_byte++];
 	
 	// swap buffers when done
 	// raise flag for main loop to begin writing
@@ -265,26 +312,21 @@ ISR(TIMER0_COMPA_vect) {
 	#endif
 }
 
+uint8_t adc_repeat = 5;
+// symbol transmitter
+ISR(TIMER0_COMPA_vect) {
+	read_transmit_buffer();
+
+	// fit ADC read routine here since ISR overhead is too much at higher speeds
+	if (adc_repeat == 5) {
+		adc_repeat = 0;
+		write_adc_buffer();	
+	}
+	adc_repeat++;
+}
+
 // ADC sampling interrupt
 ISR(TIMER2_COMPA_vect) {
-	#if DEBUG_SIGNALS
-	DEBUG_PORT |= (1 << DEBUG_PIN_ADC);
-	#endif
-	
-	ADC_BUFFER_WR[curr_adc_wr_byte++] = ADCH;
-	ADCSRA |= (1 << ADIF);
-	ADCSRA |= (1 << ADSC); // take a single conversion
-	
-	if (curr_adc_wr_byte == ADC_BUFFER_SIZE) {
-		curr_adc_wr_byte = 0;
-		uint8_t* tmp = ADC_BUFFER_RD;
-		ADC_BUFFER_RD = ADC_BUFFER_WR;
-		ADC_BUFFER_WR = tmp;
-		adc_buffer_rd_ready = 1;
-	}
-	
-	#if DEBUG_SIGNALS
-	DEBUG_PORT &= ~(1 << DEBUG_PIN_ADC);
-	#endif
+	write_adc_buffer();	
 }
 
