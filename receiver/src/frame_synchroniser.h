@@ -201,7 +201,7 @@ private:
     ProcessResult process_await_block_size(const std::complex<float> IQ) {
         process_decoder_symbol(IQ);
         bool is_done = 
-            (encoded_bytes == nb_bytes_for_block_size) &&
+            (encoded_bytes >= nb_bytes_for_block_size) &&
             (encoded_bits == 0);
         
         if (!is_done) {
@@ -218,8 +218,9 @@ private:
         const uint16_t rx_block_size = *reinterpret_cast<uint16_t*>(&decoded_buffer[0]);
         payload.length = rx_block_size;
         // our receiving block size must fit into the buffer with length and crc
-        constexpr int frame_overhead = 2+1; // 2byte length and crc8
-        if (rx_block_size > (nb_buffer-frame_overhead)) {
+        constexpr int frame_overhead = 2+1+1; // 2byte length and crc8 and null terminator
+        const int min_block_size = nb_bytes_for_block_size/2 - 3;
+        if ((rx_block_size > (nb_buffer/2 -frame_overhead)) || (rx_block_size < min_block_size)) {
             payload.buf = NULL; 
             bits_since_preamble = 0;
             state = State::WAIT_PREAMBLE; 
@@ -227,7 +228,7 @@ private:
         } else {
             payload.buf = NULL;
             decoded_block_size = rx_block_size;
-            encoded_block_size = 2*(decoded_block_size+2+1);
+            encoded_block_size = 2*(decoded_block_size+frame_overhead);
             state = State::WAIT_PAYLOAD; 
             return ProcessResult::BLOCK_SIZE_OK;
         }
@@ -236,7 +237,7 @@ private:
     ProcessResult process_await_payload(const std::complex<float> IQ) {
         process_decoder_symbol(IQ);
         bool is_done = 
-            (encoded_bytes == encoded_block_size) &&
+            (encoded_bytes >= encoded_block_size) &&
             (encoded_bits == 0);
 
         if (!is_done) {
@@ -250,10 +251,16 @@ private:
             nb_buffer-decoded_bytes,
             true);
 
+        // packet structure
+        // 0:1 -> uint16_t length
+        // 2:2+N -> uint8_t* payload
+        // Let K = 2+N+1
+        // K:K -> uint8_t crc8
+        // K+1:K+1 -> uint8_t trellis null terminator 
         constexpr int frame_length_field_size = 2;
         uint8_t* payload_buf = &decoded_buffer[frame_length_field_size];
 
-        const uint8_t crc8_true = decoded_buffer[decoded_bytes-1];
+        const uint8_t crc8_true = decoded_buffer[decoded_bytes-2];
         const uint8_t crc8_pred = crc8_calc.process(payload_buf, decoded_block_size);
         const auto dist_err = vitdec.get_curr_error();
         const bool crc8_mismatch = (crc8_true != crc8_pred);
