@@ -51,14 +51,39 @@ static void glfw_window_focus_callback(GLFWwindow* window, int focused)
     is_main_window_focused = focused;
 }
 
+class AudioData {
+public:
+    const int audio_buffer_size;
+    uint8_t* audio_buffer = NULL;
+    int16_t* pcm_buffer = NULL;
+    int total_packets = 0;
+    int incorrect_packets = 0;
+    int correct_packets = 0;
+    int corrupted_packets = 0;
+    int repaired_packets = 0;
+public:
+    AudioData(const int _N)
+    : audio_buffer_size(_N) 
+    {
+        audio_buffer = new uint8_t[_N];
+        pcm_buffer = new int16_t[_N];
+    }
+
+    ~AudioData() {
+        delete [] audio_buffer;
+        delete [] pcm_buffer;
+    }
+};
+
 void demodulator_thread(
     FILE* fp, CarrierToSymbolDemodulator* demod, const int block_size,
     CarrierToSymbolDemodulatorBuffers* snapshot_buffer, bool* snapshot_trigger,
-    uint8_t* audio_buffer, const int audio_buffer_size,
-    int* audio_gain) 
+    AudioData* aud_data, int* audio_gain) 
 {
     auto x_buffer = new std::complex<uint8_t>[block_size];
     auto y_buffer = new std::complex<float>[block_size];
+
+    const int audio_buffer_size = aud_data->audio_buffer_size;
 
     constexpr uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
     constexpr uint16_t SCRAMBLER_CODE = 0b1000010101011001;
@@ -69,29 +94,32 @@ void demodulator_thread(
 
     int curr_audio_buffer_index = 0;
 
-    float* audio_filter_buffer = new float[audio_buffer_size];
-    int16_t* pcm_buffer = new int16_t[audio_buffer_size];
+    const int audio_payload_length = 100;
+    const int message_metadata_length = 13;
 
-    auto payload_handler = [&pcm_buffer, &audio_buffer, &curr_audio_buffer_index, audio_buffer_size, &audio_gain](uint8_t* x, const uint16_t N) {
+    auto payload_handler = [&aud_data, &curr_audio_buffer_index, &audio_gain, audio_payload_length](uint8_t* x, const uint16_t N) {
         // if not an audio block
-        if (N != 100) {
+        if (N != audio_payload_length) {
             LOG_MESSAGE("message=%.*s\n", N, x);
             return;
         }
 
         for (int i = 0; i < N; i++) {
             const uint8_t v = x[i];
-            audio_buffer[curr_audio_buffer_index] = v;
-            curr_audio_buffer_index = (curr_audio_buffer_index+1) % audio_buffer_size;
+            aud_data->audio_buffer[curr_audio_buffer_index] = v;
 
 
             // amplify the signal
             int16_t v0 = static_cast<int16_t>(v);
             v0 = v0 - 128;
             v0 = v0 * (*audio_gain);
-            pcm_buffer[i] = v0;
+            aud_data->pcm_buffer[curr_audio_buffer_index] = v0;
+
+            if (curr_audio_buffer_index == (aud_data->audio_buffer_size-1)) {
+                fwrite(aud_data->pcm_buffer, sizeof(int16_t), aud_data->audio_buffer_size, stdout);
+            }
+            curr_audio_buffer_index = (curr_audio_buffer_index+1) % aud_data->audio_buffer_size;
         }
-        fwrite(pcm_buffer, sizeof(int16_t), N, stdout);
     };
 
     size_t rd_block_size = 0;
@@ -99,6 +127,10 @@ void demodulator_thread(
     while ((rd_block_size = fread(x_buffer, 2*sizeof(uint8_t), block_size, fp)) > 0) {
         if (rd_block_size != block_size) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
+            // if we are reading from a file, repeat
+            if (fp != stdin) {
+                fseek(fp, 0, 0);
+            }
             continue;
         }
         rd_total_blocks++; 
@@ -106,10 +138,52 @@ void demodulator_thread(
         for (int i = 0; i < total_symbols; i++) {
             const auto IQ = y_buffer[i];
             const auto res = frame_sync.process(IQ);
+            auto& p = frame_sync.payload;
             using Res = FrameSynchroniser<uint32_t>::ProcessResult;
-            if (res == Res::PAYLOAD_OK) {
-                auto& p = frame_sync.payload;
-                payload_handler(p.buf, p.length);
+            switch (res) {
+            case Res::PAYLOAD_OK:
+                {
+                    // if (p.length == audio_payload_length) {
+                    {
+                        aud_data->total_packets++;
+                        aud_data->correct_packets++;
+
+                        if (p.decoded_error > 0) {
+                            aud_data->repaired_packets++;
+                        }
+                    } 
+                    if ((p.length != audio_payload_length) && (p.length != message_metadata_length)) {
+                        // aud_data->corrupted_packets++;
+                    }
+                    payload_handler(p.buf, p.length);
+                }
+                break;
+            case Res::PAYLOAD_ERR:
+                {
+                    // if (p.length == audio_payload_length) {
+                    {
+                        aud_data->total_packets++;
+                        aud_data->incorrect_packets++;
+                    }
+                    // if ((p.length != audio_payload_length) && (p.length != message_metadata_length)) {
+                    //     aud_data->corrupted_packets++;
+                    // }
+                }
+                break;
+            case Res::BLOCK_SIZE_OK:
+                // LOG_MESSAGE("block_size=%d\n", p.length);
+                break;
+            case Res::PREAMBLE_FOUND:
+                {
+                    auto& s = frame_sync.preamble_state;
+                    if (s.desync_bitcount > 0) {
+                        // LOG_MESSAGE("preamble desync: %d bits\n", s.desync_bitcount);
+                    }
+                    if (s.phase_conflict) {
+                        // LOG_MESSAGE("phase conflict\n");
+                    }
+                }
+                break;
             }
         }
 
@@ -121,8 +195,6 @@ void demodulator_thread(
     
     delete [] x_buffer;
     delete [] y_buffer;
-    delete [] pcm_buffer;
-    delete [] audio_filter_buffer;
 }
 
 int main(int argc, char** argv)
@@ -139,8 +211,9 @@ int main(int argc, char** argv)
         fp_in = tmp;
     }
 
-    // const int block_size = 4096;
-    const int block_size = 8192;
+    /* const int block_size = 4096; */
+    /* const int block_size = 8192; */
+    const int block_size = 8192*2;
     CarrierToSymbolDemodulator demod(block_size);
 
     // swap between live and snapshot buffer
@@ -151,14 +224,15 @@ int main(int argc, char** argv)
     auto render_buffer = demod_buffer;
 
     const int audio_buffer_size = 10000;
-    uint8_t audio_buffer[audio_buffer_size] = {0};
     int audio_gain = 16;
+
+    auto aud_data = AudioData(audio_buffer_size);
     
     auto demod_thread = std::thread(
         demodulator_thread, 
         fp_in, &demod, block_size, 
         snapshot_buffer, &snapshot_trigger,
-        audio_buffer, audio_buffer_size, &audio_gain);
+        &aud_data, &audio_gain);
 
     auto time_scale = new float[block_size];
     const float Fs = 1e6;
@@ -303,7 +377,7 @@ int main(int argc, char** argv)
         ImGui::Begin("Audio Buffer");
         if (ImPlot::BeginPlot("##Audio buffer")) {
             ImPlot::SetupAxisLimits(ImAxis_Y1, 9, 256, ImPlotCond_Once);
-            ImPlot::PlotLine("Audio", audio_buffer, audio_buffer_size);
+            ImPlot::PlotLine("Audio", aud_data.audio_buffer, aud_data.audio_buffer_size);
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -328,19 +402,43 @@ int main(int argc, char** argv)
             ImGui::End();
         }
 
+        if (ImGui::Begin("Statistics")) {
+            ImGui::Text("Received=%d\n", aud_data.total_packets);
+            ImGui::Text("Correct=%d\n", aud_data.correct_packets);
+            ImGui::Text("Incorrect=%d\n", aud_data.incorrect_packets);
+            ImGui::Text("Corrupted=%d\n", aud_data.corrupted_packets);
+            ImGui::Text("Repaired=%d\n", aud_data.repaired_packets);
+            const float PER = (float)aud_data.incorrect_packets / (float)aud_data.total_packets;
+            const float RER = (float)aud_data.repaired_packets / (float)aud_data.correct_packets;
+            ImGui::Text("Packet error rate=%.2f%%\n", PER*100.0f);
+            ImGui::Text("Packet repair rate=%.2f%%\n", RER*100.0f);
+
+            if (ImGui::Button("Reset")) {
+                aud_data.total_packets = 0;
+                aud_data.incorrect_packets = 0;
+                aud_data.correct_packets = 0;
+                aud_data.corrupted_packets = 0;
+                aud_data.repaired_packets = 0;
+            }
+            ImGui::End();
+        }
+
 
         ImGui::Begin("Constellation");
         if (ImPlot::BeginPlot("##Constellation", ImVec2(-1,0), ImPlotFlags_Equal)) {
+            ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, -2, 2, ImPlotCond_Once);
+            const float marker_size = 3.0f;
             {
                 auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out);
+                ImPlot::SetNextMarkerStyle(0, marker_size);
                 ImPlot::PlotScatter("IQ demod", &buffer[0], &buffer[1], block_size, 0, 0, 2*sizeof(float));
-                ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
             }
             {
                 auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out);
                 ImPlot::HideNextItem(true, ImPlotCond_Once);
+                ImPlot::SetNextMarkerStyle(0, marker_size);
                 ImPlot::PlotScatter("IQ raw", &buffer[0], &buffer[1], block_size, 0, 0, 2*sizeof(float));
-                ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
             }
             ImPlot::EndPlot();
         }
