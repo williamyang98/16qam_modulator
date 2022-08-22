@@ -21,11 +21,11 @@ constexpr float PI = (float)M_PI;
 // constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
 // constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
 // 200kHz @ Fs=2MHz cutoff
-// constexpr float FIR1_TAP_B[] = {-0.01259277478717816f,-0.02704833486706803f,-0.031157016036431583f,-0.003351666747179282f,0.06651710329324828f,0.1635643048779222f,0.249729473226146f,0.2842779082622769f,0.249729473226146f,0.1635643048779222f,0.06651710329324828f,-0.003351666747179282f,-0.031157016036431583f,-0.02704833486706803f,-0.01259277478717816f};
-// constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-// 400kHz @ Fs=2MHz cutoff
-constexpr float FIR1_TAP_B[] = {1.24593522022721e-18f,0.00557150275358611f,0.00788955841781937f,-0.0165219973844350f,-0.0508056027127646f,1.19921264946869e-17f,0.183871713137048f,0.369994825788746f,0.369994825788746f,0.183871713137048f,1.19921264946869e-17f,-0.0508056027127646f,-0.0165219973844350f,0.00788955841781937f,0.00557150275358611f,1.24593522022721e-18f};
+constexpr float FIR1_TAP_B[] = {-0.01259277478717816f,-0.02704833486706803f,-0.031157016036431583f,-0.003351666747179282f,0.06651710329324828f,0.1635643048779222f,0.249729473226146f,0.2842779082622769f,0.249729473226146f,0.1635643048779222f,0.06651710329324828f,-0.003351666747179282f,-0.031157016036431583f,-0.02704833486706803f,-0.01259277478717816f};
 constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
+// 400kHz @ Fs=2MHz cutoff
+// constexpr float FIR1_TAP_B[] = {1.24593522022721e-18f,0.00557150275358611f,0.00788955841781937f,-0.0165219973844350f,-0.0508056027127646f,1.19921264946869e-17f,0.183871713137048f,0.369994825788746f,0.369994825788746f,0.183871713137048f,1.19921264946869e-17f,-0.0508056027127646f,-0.0165219973844350f,0.00788955841781937f,0.00557150275358611f,1.24593522022721e-18f};
+// constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
 // 50kHz @ Fs=1MHz cutoff
 // constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
 // constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
@@ -58,11 +58,11 @@ const int IIR2_TAP_ORDER = sizeof(IIR2_TAP_A) / sizeof(float);
 
 // ted phase error fir filter
 // 50kHz filter @ Fs=2MHz
-const float IIR3_TAP_B[] = {0.0729596572682667f,0.0729596572682667f};
-const float IIR3_TAP_A[] = {1.0f,-0.854080685463467f};
+// const float IIR3_TAP_B[] = {0.0729596572682667f,0.0729596572682667f};
+// const float IIR3_TAP_A[] = {1.0f,-0.854080685463467f};
 // 10kHz filter @ Fs=2MHz
-// const float IIR3_TAP_B[] = {0.0154662914031034f,0.0154662914031034f};
-// const float IIR3_TAP_A[] = {1.0f,-0.969067417193793f};
+const float IIR3_TAP_B[] = {0.0154662914031034f,0.0154662914031034f};
+const float IIR3_TAP_A[] = {1.0f,-0.969067417193793f};
 // 10kHz filter @ Fs=1MHz
 // const float IIR3_TAP_B[] = {0.0304687470912538f,0.0304687470912538f};
 // const float IIR3_TAP_A[] = {1.0f,-0.939062505817492f};
@@ -95,9 +95,11 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
     // calculate constants
     // Fs = 250e3;
     // Fs = 2e6;
-    Fs = 1e6;
+    Fs = 2e6;
     Ts = 1.0f/Fs;
-    Fsymbol = 50e3;
+    // Fsymbol = 50e3;
+    // Fsymbol = 71.42e3;
+    Fsymbol = 83.33e3;
     Tsymbol = 1/Fsymbol;
     Nsymbol = (int)std::floorf(Fs/Fsymbol);
 
@@ -113,13 +115,13 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
         avg_power = avg_power / (float)(QAM_Constellation_Size);
         filter_agc.target_power = avg_power;
     }
-    filter_agc.beta = 0.05f;
+    filter_agc.beta = 0.1f;
     filter_agc.current_gain = 0.1f;
 
     pll_mixer.integrator.KTs = Ts;
     pll_mixer.fcenter = 0e3;
     pll_mixer.fgain = -5e3;
-    pll_mixer.phase_error_gain = 4.0f/PI;
+    pll_mixer.phase_error_gain = 8.0f/PI;
     pll_error_prev = 0.0f;
     pll_error_int.KTs = 1000.0f*Ts;
 
@@ -129,7 +131,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
     ted_error_prev = 0.0f;
     ted_error_int.KTs = 0250.0f*Ts;
 
-    zcd_cooldown.N_cooldown = (int)std::floorf(Nsymbol*0.5f);
+    zcd_cooldown.N_cooldown = (int)std::floorf(Nsymbol*0.0f);
 
     integrate_dump_filter.KTs = Ts/Tsymbol;
 }
