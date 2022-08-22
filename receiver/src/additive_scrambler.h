@@ -17,23 +17,11 @@ public:
         reg = syncword;
     }
 
-    template <typename T>
-    T process(T x) {
-        const int N = sizeof(T)*8;
-        T mask = 0;
-        for (int i = N-1; i >= 0; i--) {
-            auto v = shift_reg();
-            mask |= v << i;
-        }
-        return x ^ mask;
-    }
+    uint8_t process(uint8_t x) {
+        uint16_t mask = reg ^ (reg << 1);
+        mask = mask >> 8;
+        reg = (reg << 8) | mask;
 
-    uint8_t shift_reg() {
-        reg = reg << 1;
-        uint8_t v = 0;
-        v ^= (reg & (1 << 14)) >> 14;
-        v ^= (reg & (1 << 15)) >> 15;
-        reg |= v;
-        return v;
+        return x ^ mask;
     }
 };
