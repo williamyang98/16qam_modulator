@@ -2,7 +2,7 @@
 // we are outputing a series of symbols with
 // 1. preamble
 // 2. (scrambler + convolutional code) as encoding
-// 3. (data + crc32) as payload
+// 3. (length + data + crc8 + trellis-terminator) as payload
 
 #include <stdio.h>
 #include <stdint.h>
@@ -235,14 +235,17 @@ int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
     // 2: length of payload
     // N: payload
     // 1: CRC8 
+    // 1: NULL trellis terminator
 
-    // T = 4 + 2*(2+N+1)
-    // T = 2N + 10
+    // T = 4 + 2*(2+N+1+1)
+    // T = 2N + 12
 
     assert(sizeof(encoder_decoder_type) == G_SYM_SIZE);
 
     int offset = 0;
     offset += push_big_endian_byte(&y[offset], PREAMBLE_CODE);
+
+    const int scrambler_offset = offset;
 
     enc.reset();
     scrambler.reset();
@@ -251,24 +254,31 @@ int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
     auto Nx_addr = reinterpret_cast<uint8_t*>(&Nx_copy);
     for (int i = 0; i < sizeof(Nx_copy); i++) {
         auto enc_out = enc.consume_byte(Nx_addr[i]);
-        auto scrambler_out = scrambler.process(enc_out);
-        offset += push_big_endian_byte(&y[offset], scrambler_out);
+        offset += push_big_endian_byte(&y[offset], enc_out);
     }
 
     for (int i = 0; i < Nx; i++) {
         auto enc_out = enc.consume_byte(x[i]);
-        auto scrambler_out = scrambler.process(enc_out);
-        offset += push_big_endian_byte(&y[offset], scrambler_out);
+        offset += push_big_endian_byte(&y[offset], enc_out);
     }
 
-    auto crc8 = crc8_calc.process(x, Nx);
+    uint8_t crc8 = crc8_calc.process(x, Nx);
     auto crc8_addr = reinterpret_cast<uint8_t*>(&crc8);
-
     for (int i = 0; i < sizeof(crc8); i++) {
         auto enc_out = enc.consume_byte(crc8_addr[i]);
-        auto scrambler_out = scrambler.process(enc_out);
-        offset += push_big_endian_byte(&y[offset], scrambler_out);
+        offset += push_big_endian_byte(&y[offset], enc_out);
     }
+
+    {
+        uint8_t trellis_terminator = 0x00;
+        auto enc_out = enc.consume_byte(trellis_terminator);
+        offset += push_big_endian_byte(&y[offset], enc_out);
+    }
+
+    for (int i = scrambler_offset; i < offset; i++) {
+        y[i] = scrambler.process(y[i]);
+    }
+
 
     return offset;
 }
@@ -293,10 +303,10 @@ int create_test_data(uint8_t** x) {
     total_data += data4_size;
 
     int total_encoded = 0;
-    total_encoded += (2*data1_size + 10);
-    total_encoded += (2*data2_size + 10);
-    total_encoded += (2*data3_size + 10);
-    total_encoded += (2*data4_size + 10);
+    total_encoded += (2*data1_size + 12);
+    total_encoded += (2*data2_size + 12);
+    total_encoded += (2*data3_size + 12);
+    total_encoded += (2*data4_size + 12);
 
     // encoding size is given as the following
     // 4: preamble
@@ -304,9 +314,10 @@ int create_test_data(uint8_t** x) {
     // 2: length of payload
     // N: payload
     // 1: CRC8 
+    // 1: Trellis terminator 
 
     // T = 4 + 2*(2+N+1)
-    // T = 2N + 10
+    // T = 2N + 12
 
     uint8_t* frame = new uint8_t[total_encoded];
 
