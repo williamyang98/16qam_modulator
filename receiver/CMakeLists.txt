@@ -10,6 +10,9 @@ set(SRC_FILES
     src/carrier_dsp_blocks.cpp
     src/carrier_dsp.cpp
     src/filter_designer.cpp
+    src/constellation.cpp
+    src/frame_decoder.cpp
+    src/preamble_detector.cpp
 )
 
 add_executable(read_data 

@@ -22,6 +22,7 @@
 
 #include "carrier_dsp.h"
 #include "frame_synchroniser.h"
+#include "constellation.h"
 
 #define PRINT_LOG 1
 #if PRINT_LOG 
@@ -76,12 +77,17 @@ public:
 };
 
 void demodulator_thread(
-    FILE* fp, CarrierToSymbolDemodulator* demod, const int block_size,
-    CarrierToSymbolDemodulatorBuffers* snapshot_buffer, bool* snapshot_trigger,
+    FILE* fp, 
+    const int block_size, 
+    CarrierToSymbolDemodulatorBuffers* demod_buffer, CarrierToSymbolDemodulatorBuffers* snapshot_buffer, 
+    CarrierDemodulatorSpecification* spec, ConstellationSpecification* constellation,
+    bool* snapshot_trigger,
     AudioData* aud_data, int* audio_gain) 
 {
-    auto x_buffer = new std::complex<uint8_t>[block_size];
-    auto y_buffer = new std::complex<float>[block_size];
+
+    // quick map into buffers
+    auto IQ_mod_buffer = new std::complex<uint8_t>[block_size];
+    auto IQ_demod_buffer = new std::complex<float>[block_size];
 
     const int audio_buffer_size = aud_data->audio_buffer_size;
 
@@ -89,7 +95,25 @@ void demodulator_thread(
     constexpr uint16_t SCRAMBLER_CODE = 0b1000010101011001;
     // constexpr uint32_t CRC32_POLY = 0x04C11DB7;
     constexpr uint8_t CRC8_POLY = 0xD5;
-    auto frame_sync = FrameSynchroniser(PREAMBLE_CODE, SCRAMBLER_CODE, CRC8_POLY, audio_buffer_size);
+
+    auto frame_decoder = new FrameDecoder(block_size);
+    auto scrambler = new AdditiveScrambler(SCRAMBLER_CODE);
+    auto crc8_calc = new CRC8_Calculator(CRC8_POLY);
+    auto vitdec = new ViterbiDecoder<encoder_decoder_type>(25);
+
+    frame_decoder->descrambler = scrambler;
+    frame_decoder->crc8_calc= crc8_calc;
+    frame_decoder->vitdec = vitdec;
+
+    auto frame_sync = new FrameSynchroniser();
+    auto preamble_detector = new PreambleDetector(PREAMBLE_CODE, 4);
+    frame_sync->constellation = constellation;
+    frame_sync->frame_decoder = frame_decoder;
+    frame_sync->preamble_detector = preamble_detector;
+
+    auto demod = new CarrierToSymbolDemodulator(*spec, constellation);
+    demod->buffers = demod_buffer;
+
 
     int curr_audio_buffer_index = 0;
 
@@ -123,7 +147,7 @@ void demodulator_thread(
 
     size_t rd_block_size = 0;
     int rd_total_blocks = 0;
-    while ((rd_block_size = fread(x_buffer, 2*sizeof(uint8_t), block_size, fp)) > 0) {
+    while ((rd_block_size = fread(IQ_mod_buffer, 2*sizeof(uint8_t), block_size, fp)) > 0) {
         if (rd_block_size != block_size) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
             // if we are reading from a file, repeat
@@ -133,16 +157,16 @@ void demodulator_thread(
             continue;
         }
         rd_total_blocks++; 
-        const auto total_symbols = demod->ProcessBlock(x_buffer, y_buffer);
+        const auto total_symbols = demod->ProcessBlock(IQ_mod_buffer, IQ_demod_buffer);
         for (int i = 0; i < total_symbols; i++) {
-            const auto IQ = y_buffer[i];
-            const auto res = frame_sync.process(IQ);
-            auto& p = frame_sync.payload;
-            using Res = FrameSynchroniser::ProcessResult;
+            const auto IQ = IQ_demod_buffer[i];
+            const auto res = frame_sync->process(IQ);
+            auto p = frame_decoder->GetPayload();
+
+            using Res = FrameSynchroniser::Result;
             switch (res) {
             case Res::PAYLOAD_OK:
                 {
-                    // if (p.length == audio_payload_length) {
                     {
                         aud_data->total_packets++;
                         aud_data->correct_packets++;
@@ -151,22 +175,15 @@ void demodulator_thread(
                             aud_data->repaired_packets++;
                         }
                     } 
-                    if ((p.length != audio_payload_length) && (p.length != message_metadata_length)) {
-                        // aud_data->corrupted_packets++;
-                    }
                     payload_handler(p.buf, p.length);
                 }
                 break;
             case Res::PAYLOAD_ERR:
                 {
-                    // if (p.length == audio_payload_length) {
                     {
                         aud_data->total_packets++;
                         aud_data->incorrect_packets++;
                     }
-                    // if ((p.length != audio_payload_length) && (p.length != message_metadata_length)) {
-                    //     aud_data->corrupted_packets++;
-                    // }
                 }
                 break;
             case Res::BLOCK_SIZE_OK:
@@ -174,11 +191,10 @@ void demodulator_thread(
                 break;
             case Res::PREAMBLE_FOUND:
                 {
-                    auto& s = frame_sync.preamble_state;
-                    if (s.desync_bitcount > 0) {
+                    if (preamble_detector->GetDesyncBitcount() > 0) {
                         // LOG_MESSAGE("preamble desync: %d bits\n", s.desync_bitcount);
                     }
-                    if (s.phase_conflict) {
+                    if (preamble_detector->IsPhaseConflict()) {
                         // LOG_MESSAGE("phase conflict\n");
                     }
                 }
@@ -192,8 +208,15 @@ void demodulator_thread(
         }
     }
     
-    delete [] x_buffer;
-    delete [] y_buffer;
+    delete [] IQ_mod_buffer;
+    delete [] IQ_demod_buffer;
+    delete frame_decoder;
+    delete scrambler;
+    delete crc8_calc;
+    delete vitdec;
+    delete frame_sync;
+    delete preamble_detector;
+    delete demod;
 }
 
 int main(int argc, char** argv)
@@ -212,7 +235,6 @@ int main(int argc, char** argv)
 
     // const int block_size = 4096;
     const int block_size = 8192;
-    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
 
     CarrierDemodulatorSpecification spec;
     {
@@ -238,26 +260,27 @@ int main(int argc, char** argv)
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
 
-    CarrierToSymbolDemodulator demod(spec);
-    demod.buffers = demod_buffer;
-
-    // swap between live and snapshot buffer
+    auto constellation = new SquareConstellation(4);
+    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
     auto snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
+    // swap between live and snapshot buffer
+    auto render_buffer = demod_buffer;
     bool snapshot_trigger = false;
 
-    auto render_buffer = demod_buffer;
-
+    // save demodulated audio
     const int audio_buffer_size = 10000;
     int audio_gain = 16;
-
     auto aud_data = AudioData(audio_buffer_size);
     
     auto demod_thread = std::thread(
         demodulator_thread, 
-        fp_in, &demod, block_size, 
-        snapshot_buffer, &snapshot_trigger,
+        fp_in, 
+        block_size, demod_buffer, snapshot_buffer, 
+        &spec, constellation,
+        &snapshot_trigger,
         &aud_data, &audio_gain);
 
+    // Generate x-axis timescale for implot
     auto time_scale = new float[block_size];
     const float Fs = 1e6;
     const float Ts = 1.0f/Fs;
@@ -546,6 +569,8 @@ int main(int argc, char** argv)
     demod_thread.join();
     fclose(fp_in);
 
+    delete constellation;
+    delete demod_buffer;
     delete snapshot_buffer;
 
     return 0;
