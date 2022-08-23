@@ -31,5 +31,6 @@ public:
     std::complex<float> GetPhase() { 
         return preamble_phases[selected_phase];
     }
+    int GetPhaseIndex() { return selected_phase; }
     int GetDesyncBitcount() { return desync_bitcount; }
 };

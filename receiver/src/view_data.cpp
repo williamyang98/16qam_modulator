@@ -244,7 +244,7 @@ int main(int argc, char** argv)
         spec.f_sample = 2e6;
         spec.f_symbol = Fsymbol;
         spec.baseband_filter.cutoff = Fsymbol*4;
-        spec.baseband_filter.M = 60;
+        spec.baseband_filter.M = 20;
         spec.ac_filter.k = 0.99999f;
         spec.agc.beta = 0.1f;
         spec.agc.initial_gain = 0.1f;

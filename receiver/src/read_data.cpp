@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "carrier_dsp.h"
+#include "carrier_demodulator_spec.h"
 #include "frame_synchroniser.h"
 
 #define PRINT_LOG 0
@@ -33,19 +34,67 @@ int main(int argc, char **argv) {
     }
 
     // carrier demodulator
+    const float Fsymbol = 88e3;
+    const float Fsample = 2e6;
+    const float Faudio = Fsymbol/5.0f;
+
     const int block_size = 4096;
-    CarrierToSymbolDemodulator demod(block_size);
+    const int audio_buffer_size = (int)std::ceil(Faudio);
+
     auto x_buffer = new std::complex<uint8_t>[block_size];
     auto y_buffer = new std::complex<float>[block_size];
 
-    demod.pll_mixer.fcenter = -1000;
+    CarrierDemodulatorSpecification spec;
+    {
+        const float PI = 3.1415f;
 
-    const int rx_buffer_size = 4096;
-    auto frame_sync = FrameSynchroniser<uint32_t>(PREAMBLE_CODE, SCRAMBLER_CODE, CRC8_POLY, rx_buffer_size);
+        spec.f_sample = Fsample;
+        spec.f_symbol = Fsymbol;
+        spec.baseband_filter.cutoff = Fsymbol*4;
+        spec.baseband_filter.M = 20;
+        spec.ac_filter.k = 0.99999f;
+        spec.agc.beta = 0.1f;
+        spec.agc.initial_gain = 0.1f;
+        spec.carrier_pll.f_center = 0e3;
+        spec.carrier_pll.f_gain = 10e3;
+        spec.carrier_pll.phase_error_gain = 8.0f/PI;
+        spec.carrier_pll_filter.butterworth_cutoff = 5e3;
+        spec.carrier_pll_filter.integrator_gain = 1000.0f;
+        spec.ted_pll.f_gain = 10e3;
+        spec.ted_pll.f_offset = 0e3;
+        spec.ted_pll.phase_error_gain = 1.0f;
+        spec.ted_pll_filter.butterworth_cutoff = 10e3;
+        spec.ted_pll_filter.integrator_gain = 250.0f;
+    }
 
-    uint16_t* pcm_buffer = new uint16_t[rx_buffer_size];
+    auto constellation = new SquareConstellation(4);
 
-    auto payload_handler = [&pcm_buffer](uint8_t* x, const uint16_t N) {
+    auto frame_decoder = new FrameDecoder(block_size);
+    auto scrambler = new AdditiveScrambler(SCRAMBLER_CODE);
+    auto crc8_calc = new CRC8_Calculator(CRC8_POLY);
+    auto vitdec = new ViterbiDecoder<encoder_decoder_type>(25);
+
+    frame_decoder->descrambler = scrambler;
+    frame_decoder->crc8_calc= crc8_calc;
+    frame_decoder->vitdec = vitdec;
+
+    auto frame_sync = new FrameSynchroniser();
+    auto preamble_detector = new PreambleDetector(PREAMBLE_CODE, 4);
+    frame_sync->constellation = constellation;
+    frame_sync->frame_decoder = frame_decoder;
+    frame_sync->preamble_detector = preamble_detector;
+
+    auto demod = new CarrierToSymbolDemodulator(spec, constellation);
+    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
+    demod->buffers = demod_buffer;
+
+    uint16_t* pcm_buffer = new uint16_t[audio_buffer_size];
+    int pcm_buffer_index = 0;
+
+    auto payload_handler = 
+        [&pcm_buffer, &pcm_buffer_index, audio_buffer_size]
+        (uint8_t* x, const uint16_t N) 
+    {
         // if not an audio block
         if (N != 100) {
             LOG_MESSAGE("message=%.*s\n", N, x);
@@ -60,9 +109,15 @@ int main(int argc, char **argv) {
             v0 = v0 + (1u << 8);
             uint16_t v1 = (uint16_t)(v0);
             v1 = v1 * 2;
-            pcm_buffer[i] = (uint16_t)(v1);
+
+            pcm_buffer[pcm_buffer_index] = v1;
+            pcm_buffer_index++;
+
+            if (pcm_buffer_index == audio_buffer_size) {
+                pcm_buffer_index = 0;
+                fwrite(pcm_buffer, sizeof(uint16_t), audio_buffer_size, stdout);
+            }
         }
-        fwrite(pcm_buffer, sizeof(uint16_t), N, stdout);
     };
 
     size_t rd_block_size = 0;
@@ -74,45 +129,40 @@ int main(int argc, char **argv) {
         }
         rd_total_blocks++; 
 
-        auto total_symbols = demod.ProcessBlock(x_buffer, y_buffer);
+        auto total_symbols = demod->ProcessBlock(x_buffer, y_buffer);
         for (int i = 0; i < total_symbols; i++) {
             const auto IQ = y_buffer[i];
-            const auto res = frame_sync.process(IQ);
-            using ProcessResult = FrameSynchroniser<uint32_t>::ProcessResult;
+            const auto res = frame_sync->process(IQ);
+            auto payload = frame_decoder->GetPayload();
+
+            using Res = FrameSynchroniser::Result;
             switch (res) {
-            case ProcessResult::PREAMBLE_FOUND:
-                {
-                    auto& state = frame_sync.preamble_state;
-                    LOG_MESSAGE("Preamble: phase %d, conflict=%d, desync=%d\n", 
-                            state.selected_phase, state.phase_conflict, state.desync_bitcount);
-                }
+            case Res::PREAMBLE_FOUND:
+                LOG_MESSAGE(
+                    "Preamble: phase %d, conflict=%d, desync=%d\n", 
+                    preamble_detector->GetPhaseIndex(), 
+                    preamble_detector->IsPhaseConflict(), 
+                    preamble_detector->GetDesyncBitcount());
                 break;
-            case ProcessResult::BLOCK_SIZE_OK:
-                LOG_MESSAGE("Got block size: %d\n", frame_sync.payload.length);
+            case Res::BLOCK_SIZE_OK:
+                LOG_MESSAGE("Got block size: %d\n", payload.length);
                 break;
-            case ProcessResult::BLOCK_SIZE_ERR:
-                LOG_MESSAGE("Got invalid block size: %d\n", frame_sync.payload.length);
+            case Res::BLOCK_SIZE_ERR:
+                LOG_MESSAGE("Got invalid block size: %d\n", payload.length);
                 break;
-            case ProcessResult::PAYLOAD_ERR:
+            case Res::PAYLOAD_ERR:
                 LOG_MESSAGE("Got mismatching crc on payload\n");
                 break;
-            case ProcessResult::PAYLOAD_OK:
-                {
-                    auto& p = frame_sync.payload;
-                    payload_handler(p.buf, p.length);
-                }
+            case Res::PAYLOAD_OK:
+                payload_handler(payload.buf, payload.length);
                 break;
-            case ProcessResult::NONE:
+            case Res::NONE:
             default:
                 break;
             }
         }
 
     }
-
-    delete [] x_buffer;
-    delete [] y_buffer;
-    delete [] pcm_buffer;
 
     fclose(fp_in);
 
