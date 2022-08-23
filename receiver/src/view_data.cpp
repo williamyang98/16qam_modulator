@@ -89,8 +89,7 @@ void demodulator_thread(
     constexpr uint16_t SCRAMBLER_CODE = 0b1000010101011001;
     // constexpr uint32_t CRC32_POLY = 0x04C11DB7;
     constexpr uint8_t CRC8_POLY = 0xD5;
-    // auto frame_sync = FrameSynchroniser<uint32_t>(PREAMBLE_CODE, SCRAMBLER_CODE, CRC32_POLY);
-    auto frame_sync = FrameSynchroniser<uint32_t>(PREAMBLE_CODE, SCRAMBLER_CODE, CRC8_POLY, audio_buffer_size);
+    auto frame_sync = FrameSynchroniser(PREAMBLE_CODE, SCRAMBLER_CODE, CRC8_POLY, audio_buffer_size);
 
     int curr_audio_buffer_index = 0;
 
@@ -139,7 +138,7 @@ void demodulator_thread(
             const auto IQ = y_buffer[i];
             const auto res = frame_sync.process(IQ);
             auto& p = frame_sync.payload;
-            using Res = FrameSynchroniser<uint32_t>::ProcessResult;
+            using Res = FrameSynchroniser::ProcessResult;
             switch (res) {
             case Res::PAYLOAD_OK:
                 {
@@ -211,13 +210,38 @@ int main(int argc, char** argv)
         fp_in = tmp;
     }
 
-    /* const int block_size = 4096; */
-    /* const int block_size = 8192; */
-    const int block_size = 8192*2;
-    CarrierToSymbolDemodulator demod(block_size);
+    // const int block_size = 4096;
+    const int block_size = 8192;
+    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
+
+    CarrierDemodulatorSpecification spec;
+    {
+        const float PI = 3.1415f;
+        const float Fsymbol = 88e3;
+
+        spec.f_sample = 2e6;
+        spec.f_symbol = Fsymbol;
+        spec.baseband_filter.cutoff = Fsymbol*4;
+        spec.baseband_filter.M = 60;
+        spec.ac_filter.k = 0.99999f;
+        spec.agc.beta = 0.1f;
+        spec.agc.initial_gain = 0.1f;
+        spec.carrier_pll.f_center = 0e3;
+        spec.carrier_pll.f_gain = 10e3;
+        spec.carrier_pll.phase_error_gain = 8.0f/PI;
+        spec.carrier_pll_filter.butterworth_cutoff = 5e3;
+        spec.carrier_pll_filter.integrator_gain = 1000.0f;
+        spec.ted_pll.f_gain = 10e3;
+        spec.ted_pll.f_offset = 0e3;
+        spec.ted_pll.phase_error_gain = 1.0f;
+        spec.ted_pll_filter.butterworth_cutoff = 10e3;
+        spec.ted_pll_filter.integrator_gain = 250.0f;
+    }
+
+    CarrierToSymbolDemodulator demod(spec);
+    demod.buffers = demod_buffer;
 
     // swap between live and snapshot buffer
-    auto demod_buffer = demod.buffers;
     auto snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
     bool snapshot_trigger = false;
 
@@ -396,8 +420,8 @@ int main(int argc, char** argv)
                 }
             }
 
-            ImGui::SliderFloat("Symbol frequency scaler", &demod.ted_clock.fcenter_factor, 0.0f, 2.0f);
-            ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
+            // ImGui::SliderFloat("Symbol frequency scaler", &demod.ted_clock.fcenter_factor, 0.0f, 2.0f);
+            // ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
             ImGui::SliderInt("Audio gain", &audio_gain, 0, 128);
             ImGui::End();
         }

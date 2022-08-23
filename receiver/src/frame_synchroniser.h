@@ -11,33 +11,8 @@
 #include "additive_scrambler.h"
 
 #include "constellation.h"
+#include "preamble_filter.h"
 
-#define USE_16QAM 1
-
-// shift register which searches for preamble sequence
-template <typename T>
-class PreambleFilter {
-private:
-    T reg;
-    const T preamble;
-public:
-    PreambleFilter(const T _preamble) 
-    : preamble(_preamble) {
-        reg = 0;
-    }
-    void reset() {
-        reg = 0;
-    }
-    uint8_t process(const uint8_t sym, const int N=2) {
-        const uint8_t mask = (1<<N)-1;
-        reg = reg << N;
-        reg = reg | (sym & mask);
-
-        return (reg ^ preamble) == 0;
-    }
-};
-
-template <typename T>
 class FrameSynchroniser {
 public:
     // Payload state for different process results
@@ -69,7 +44,7 @@ public:
 private:
     enum State { WAIT_PREAMBLE, WAIT_BLOCK_SIZE, WAIT_PAYLOAD };
 private:
-    PreambleFilter<T> preamble_filters[4];
+    PreambleFilter* preamble_filters[4];
     std::complex<float> preamble_mixers[4];
     AdditiveScrambler descrambler;
     ViterbiDecoder<encoder_decoder_type> vitdec;
@@ -94,15 +69,16 @@ public:
     PreambleState preamble_state;
 public:
     FrameSynchroniser(const uint32_t _preamble, const uint16_t _scrambler_code, const uint8_t _crc8_poly, const int _buffer_size) 
-    :   preamble_filters{_preamble, _preamble, _preamble, _preamble},
-        descrambler(_scrambler_code),
+    :   descrambler(_scrambler_code),
         vitdec(25),
         crc8_calc(_crc8_poly),
         nb_buffer(_buffer_size)
     {
         // generate our quadrature phase shifts 
-        for (int i = 0; i < 4; i++) {
-            const float PI_2 = 3.1415f/2.0f;
+        const int total_phases = 4;
+        const float PI_2 = 3.1415f/2.0f;
+        for (int i = 0; i < total_phases; i++) {
+            preamble_filters[i] = new VariablePreambleFilter<uint32_t>(_preamble);
             preamble_mixers[i] = std::complex<float>(std::cosf(i*PI_2), std::sinf(i*PI_2));
         }
         state = State::WAIT_PREAMBLE;
@@ -120,6 +96,11 @@ public:
     }
 
     ~FrameSynchroniser() {
+        const int total_phases = 4;
+        for (int i = 0; i < total_phases; i++) {
+            delete preamble_filters[i];
+        }
+
         delete [] descramble_buffer;
         delete [] encoded_buffer;
         delete [] decoded_buffer;
@@ -145,11 +126,6 @@ private:
     uint8_t symbol_to_bits(const std::complex<float>IQ) {
         uint8_t sym  = 0;
 
-        #if !USE_16QAM
-        sym |= (IQ.real() > 0.0f) ? 0b10 : 0b00;
-        sym |= (IQ.imag() > 0.0f) ? 0b01 : 0b00;
-        #else 
-
         float min_err = INFINITY;
         uint8_t best_match = 0;
 
@@ -164,27 +140,29 @@ private:
 
         sym = best_match;
 
-        #endif
-
         return sym;
     }
 
     ProcessResult process_await_preamble(const std::complex<float> IQ) {
         int total_preambles_found = 0;
 
-        bits_since_preamble += 2;
-        for (int i = 0; i < 4; i++) {
+        const int bits_per_symbol = 4;
+        const int total_phases = 4;
+
+        bits_since_preamble += bits_per_symbol;
+        for (int i = 0; i < total_phases; i++) {
+            auto& filter = preamble_filters[i];
             auto IQ_phi = IQ * preamble_mixers[i];
             auto sym = symbol_to_bits(IQ_phi);
 
-            const bool res = preamble_filters[i].process(sym, 4);
+            const bool res = filter->process(sym, bits_per_symbol);
             if (!res) {
                 continue;
             }
 
             preamble_state.selected_phase = i;
             total_preambles_found += 1;
-            preamble_state.desync_bitcount = bits_since_preamble-32;
+            preamble_state.desync_bitcount = bits_since_preamble-filter->get_length();
         }
 
         if (total_preambles_found > 0) {
@@ -258,9 +236,12 @@ private:
         // K:K -> uint8_t crc8
         // K+1:K+1 -> uint8_t trellis null terminator 
         constexpr int frame_length_field_size = 2;
+        const int crc8_length = 1;
+        const int trellis_terminator_length = 1;
+
         uint8_t* payload_buf = &decoded_buffer[frame_length_field_size];
 
-        const uint8_t crc8_true = decoded_buffer[decoded_bytes-2];
+        const uint8_t crc8_true = decoded_buffer[decoded_bytes-(crc8_length+trellis_terminator_length)];
         const uint8_t crc8_pred = crc8_calc.process(payload_buf, decoded_block_size);
         const auto dist_err = vitdec.get_curr_error();
         const bool crc8_mismatch = (crc8_true != crc8_pred);
@@ -289,24 +270,15 @@ private:
             descramble_buffer[encoded_bytes] = 0;
         }
 
-        #if !USE_16QAM
-        descramble_buffer[encoded_bytes] |= (sym << (6-encoded_bits));
-        encoded_bits += 2;
-        if (encoded_bits == 8) {
-            encoded_bits = 0;
-            encoded_buffer[encoded_bytes] = descrambler.process(descramble_buffer[encoded_bytes]);
-            encoded_bytes += 1;
-        }
-        #else
-        descramble_buffer[encoded_bytes] |= (sym << (4-encoded_bits));
-        encoded_bits += 4;
-        if (encoded_bits == 8) {
-            encoded_bits = 0;
-            encoded_buffer[encoded_bytes] = descrambler.process(descramble_buffer[encoded_bytes]);
-            encoded_bytes += 1;
-        }
+        const int total_bits_per_symbol = 4;
 
-        #endif
+        descramble_buffer[encoded_bytes] |= (sym << (4-encoded_bits));
+        encoded_bits += total_bits_per_symbol;
+        if (encoded_bits == 8) {
+            encoded_bits = 0;
+            encoded_buffer[encoded_bytes] = descrambler.process(descramble_buffer[encoded_bytes]);
+            encoded_bytes += 1;
+        }
     }
 
     void reset_decoders() {

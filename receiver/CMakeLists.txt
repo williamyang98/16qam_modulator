@@ -9,6 +9,7 @@ set(SRC_FILES
     src/filters.h
     src/carrier_dsp_blocks.cpp
     src/carrier_dsp.cpp
+    src/filter_designer.cpp
 )
 
 add_executable(read_data 
