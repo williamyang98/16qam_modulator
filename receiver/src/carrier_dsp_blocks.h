@@ -4,21 +4,6 @@
 #include "filters.h"
 #include <complex>
 
-// return the errors of the best match in constellation
-struct ConstellationErrorResult 
-{
-    float phase_error;
-    float mag_error;
-};
-
-// get the phase error from the known constellation
-// phase error is defined between [-pi,pi] where error=ref-actual
-// a negative phase error means the constellation is rotated counterclockwise
-ConstellationErrorResult 
-estimate_phase_error(
-    const std::complex<float> x, 
-    const std::complex<float>* C, const int N);
-
 // phase locked loop mixer for carrier
 class PLL_mixer 
 {

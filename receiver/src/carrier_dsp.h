@@ -6,6 +6,7 @@
 #include "filters.h"
 #include "carrier_dsp_blocks.h"
 #include "carrier_demodulator_spec.h"
+#include "constellation.h"
 
 class CarrierToSymbolDemodulatorBuffers
 {
@@ -68,10 +69,11 @@ private:
     Trigger_Cooldown zcd_cooldown;
     // integrate and dump filter
     Integrator_Block<std::complex<float>> integrate_dump_filter;
-private:
+    // keep track of last output symbol
     std::complex<float> y_sym_out;
+    ConstellationSpecification* constellation = NULL;
 public:
-    CarrierToSymbolDemodulator(CarrierDemodulatorSpecification _spec);
+    CarrierToSymbolDemodulator(CarrierDemodulatorSpecification _spec, ConstellationSpecification* _constellation);
     ~CarrierToSymbolDemodulator();
     // return the number of symbols read into the buffer
     // x must be at least block_size large

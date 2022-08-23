@@ -15,8 +15,10 @@ constexpr float AC_FILTER_B[] = {1.0f, -1.0f};
 constexpr float N_levels[4] = {0.5f, 0.0f, -0.5f, -1.0f};
 constexpr int total_levels = 4;
 
-CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(CarrierDemodulatorSpecification _spec)
-: spec(_spec) 
+CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
+    CarrierDemodulatorSpecification _spec,
+    ConstellationSpecification* _constellation)
+: spec(_spec), constellation(_constellation) 
 {
     // calculate constants
     {
@@ -48,15 +50,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(CarrierDemodulatorSpecifi
         auto& s = spec.agc;
         filter_agc.beta = s.beta;
         filter_agc.current_gain = s.initial_gain;
-
-        float avg_power = 0.0f;
-        for (int i = 0; i < QAM_Constellation_Size; i++) {
-            float I = QAM_Constellation[i].real();
-            float Q = QAM_Constellation[i].imag();
-            avg_power += (I*I + Q*Q);
-        }
-        avg_power = avg_power / (float)(QAM_Constellation_Size);
-        filter_agc.target_power = avg_power;
+        filter_agc.target_power = constellation->GetAveragePower();
     }
 
     // carrier pll
@@ -156,7 +150,7 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
 
         {
             const auto A = std::abs(IQ_pll);
-            auto res = estimate_phase_error(IQ_pll, QAM_Constellation, QAM_Constellation_Size);
+            auto res = estimate_phase_error(IQ_pll, constellation->GetSymbols(), constellation->GetSize());
             if (res.mag_error < thresh_acquire_error) {
                 pll_phase_error = res.phase_error;
             }
