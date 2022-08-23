@@ -1,10 +1,11 @@
 // perform dsp on the raw IQ signal and convert it to symbols
 #pragma once
+#include <stdint.h>
+#include <complex>
 
 #include "filters.h"
 #include "carrier_dsp_blocks.h"
-#include <stdint.h>
-#include <complex>
+#include "carrier_demodulator_spec.h"
 
 class CarrierToSymbolDemodulatorBuffers
 {
@@ -36,8 +37,8 @@ public:
 class CarrierToSymbolDemodulator
 {
 private:
+    const CarrierDemodulatorSpecification spec;
     // processing constants
-    const int block_size;
     float Fs;
     float Ts;
     float Fsymbol;
@@ -45,36 +46,32 @@ private:
     int Nsymbol;
 public:
     // buffers
-    CarrierToSymbolDemodulatorBuffers* buffers;
-public:
+    CarrierToSymbolDemodulatorBuffers* buffers = NULL;
+private:
     // prefiltering before demodulation
-    FIR_Filter<std::complex<float>> filter_baseband;
-    IIR_Filter<std::complex<float>> filter_ac;
+    FIR_Filter<std::complex<float>>* filter_baseband = NULL;
+    IIR_Filter<std::complex<float>>* filter_ac = NULL;
     AGC_Filter<std::complex<float>> filter_agc;
     // phase locked loop
     PLL_mixer pll_mixer;
     float pll_error_prev;
-    IIR_Filter<float> pll_error_lpf;
+    IIR_Filter<float>* pll_error_lpf;
     Integrator_Block<float> pll_error_int;
     // timing error detector
     TED_Clock ted_clock;
     float ted_error_prev;
-    IIR_Filter<float> ted_error_lpf;
+    IIR_Filter<float>* ted_error_lpf = NULL;
     Integrator_Block<float> ted_error_int;
     // zero crossing detectors
-    // Zero_Crossing_Detector I_zcd;
-    // Zero_Crossing_Detector Q_zcd;
-    N_Level_Crossing_Detector I_zcd;
-    N_Level_Crossing_Detector Q_zcd;
+    N_Level_Crossing_Detector* I_zcd = NULL;
+    N_Level_Crossing_Detector* Q_zcd = NULL;
     Trigger_Cooldown zcd_cooldown;
     // integrate and dump filter
-    Delay_Line integrate_dump_trigger_delay_line;
     Integrator_Block<std::complex<float>> integrate_dump_filter;
-// TODO: replace this with a proper buffer
 private:
     std::complex<float> y_sym_out;
 public:
-    CarrierToSymbolDemodulator(const int _block_size);
+    CarrierToSymbolDemodulator(CarrierDemodulatorSpecification _spec);
     ~CarrierToSymbolDemodulator();
     // return the number of symbols read into the buffer
     // x must be at least block_size large

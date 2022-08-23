@@ -42,7 +42,6 @@ public:
     float phase_error_gain;      // the phase error is +-1 from zero crossing detector
     float fcenter;
     float fgain;
-    float fcenter_factor = 1.0f;
 public:
     TED_Clock();
     // get current voltage in ramp integrator

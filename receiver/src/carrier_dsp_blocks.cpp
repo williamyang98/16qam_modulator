@@ -84,7 +84,7 @@ float TED_Clock::get_timing_error() {
 bool TED_Clock::update() {
     float control = phase_error * phase_error_gain;
     control = std::max(std::min(control, 1.0f), -1.0f);
-    float freq = fcenter*fcenter_factor + control*fgain;
+    float freq = fcenter + control*fgain;
     float v = integrator.process(freq);
     float offset = integrator.KTs * freq;
     if (v < (1.0f-offset)) {

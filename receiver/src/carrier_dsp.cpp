@@ -1,111 +1,54 @@
-#include "carrier_dsp.h"
-
 #define _USE_MATH_DEFINES
 #include <math.h>
-
 #include <assert.h>
+
+#include "carrier_dsp.h"
+#include "constellation.h"
+#include "filter_designer.h"
 
 constexpr float PI = (float)M_PI;
 
-// all of our demodulator filters
-
-// low pass baseband filter
-// 10kHz cutoff
-// constexpr float FIR1_TAP_B[] = {0.0115586129393857f,0.0269127184226144f,0.0689577752425094f,0.124811024018249f,0.172306936575946f,0.190905865602590f,0.172306936575946f,0.124811024018249f,0.0689577752425094f,0.0269127184226144f,0.0115586129393857f};
-// 50kHz cutoff
-// constexpr float FIR1_TAP_B[] = {-1.24137345828279e-18f,-0.0126419757368433f,-0.0246922577087696f,0.0635051299460375f,0.274797751173244f,0.398062704652663f,0.274797751173244f,0.0635051299460375f,-0.0246922577087696f,-0.0126419757368433f,-1.24137345828279e-18f};
-// 62.5kHz @ Fs=2MHz cutoff
-// constexpr float FIR1_TAP_B[] = {0.00701891326561467f,0.0116587959676490f,0.0246187865230115f,0.0451889289532004f,0.0704801267453563f,0.0960007748441594f,0.116717378951263f,0.128316294749745f,0.128316294749745f,0.116717378951263f,0.0960007748441594f,0.0704801267453563f,0.0451889289532004f,0.0246187865230115f,0.0116587959676490f,0.00701891326561467f};
-// constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-// 100kHz @ Fs=2MHz cutoff
-// constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
-// constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-// 200kHz @ Fs=2MHz cutoff
-constexpr float FIR1_TAP_B[] = {-0.01259277478717816f,-0.02704833486706803f,-0.031157016036431583f,-0.003351666747179282f,0.06651710329324828f,0.1635643048779222f,0.249729473226146f,0.2842779082622769f,0.249729473226146f,0.1635643048779222f,0.06651710329324828f,-0.003351666747179282f,-0.031157016036431583f,-0.02704833486706803f,-0.01259277478717816f};
-constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-// 400kHz @ Fs=2MHz cutoff
-// constexpr float FIR1_TAP_B[] = {1.24593522022721e-18f,0.00557150275358611f,0.00788955841781937f,-0.0165219973844350f,-0.0508056027127646f,1.19921264946869e-17f,0.183871713137048f,0.369994825788746f,0.369994825788746f,0.183871713137048f,1.19921264946869e-17f,-0.0508056027127646f,-0.0165219973844350f,0.00788955841781937f,0.00557150275358611f,1.24593522022721e-18f};
-// constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-// 50kHz @ Fs=1MHz cutoff
-// constexpr float FIR1_TAP_B[] = {0.00253999383501346f,0.00574420105960838f,0.0147083365148430f,0.0314560608717508f,0.0554822508096040f,0.0834419109654486f,0.109888911438294f,0.128859581669095f,0.135757505672686f,0.128859581669095f,0.109888911438294f,0.0834419109654486f,0.0554822508096040f,0.0314560608717508f,0.0147083365148430f,0.00574420105960838f,0.00253999383501346f};
-// constexpr int FIR1_TAP_ORDER = sizeof(FIR1_TAP_B) / sizeof(float);
-
 // ac coupling filter
-constexpr float IIR1_TAP_B[] = {1.0f, -1.0f};
-// constexpr float IIR1_TAP_A[] = {1.0f, -0.9995f};
-constexpr float IIR1_TAP_A[] = {1.0f, -0.99999f};
-constexpr int IIR1_TAP_ORDER = sizeof(IIR1_TAP_A) / sizeof(float);
+constexpr float AC_FILTER_B[] = {1.0f, -1.0f};
 
-// pll phase error first order butterworth filter
-// 2KHz butterworth 1st order filter
-// constexpr float IIR2_TAP_B[] = {0.0245216092494659f,0.0245216092494659f};
-// constexpr float IIR2_TAP_A[] = {1.0f,-0.950956781501068f};
-// 5kHz butterworth 1st order
-// constexpr float IIR2_TAP_B[] = {0.0591907038184055f,0.0591907038184055f};
-// constexpr float IIR2_TAP_A[] = {1.0f,-0.881618592363189f};
-
-// 5kHz @ Fs=2MHz Butterworth N=1 lpf
-constexpr float IIR2_TAP_B[] = {0.00779293629195155f,0.00779293629195155f};
-constexpr float IIR2_TAP_A[] = {1.0f,-0.984414127416097f};
-// 2kHz @ Fs=2MHz Butterworth N=1 lpf
-// constexpr float IIR2_TAP_B[] = {0.00313176422919270f,0.00313176422919270f};
-// constexpr float IIR2_TAP_A[] = {1.0f,-0.993736471541615f};
-
-// 2kHz @ Fs=1MHz Butterworth N=1 lpf
-// constexpr float IIR2_TAP_B[] = {0.00624403504634286f,0.00624403504634286f};
-// constexpr float IIR2_TAP_A[] = {1.0f,-0.987511929907314f};
-const int IIR2_TAP_ORDER = sizeof(IIR2_TAP_A) / sizeof(float);
-
-// ted phase error fir filter
-// 50kHz filter @ Fs=2MHz
-// const float IIR3_TAP_B[] = {0.0729596572682667f,0.0729596572682667f};
-// const float IIR3_TAP_A[] = {1.0f,-0.854080685463467f};
-// 10kHz filter @ Fs=2MHz
-const float IIR3_TAP_B[] = {0.0154662914031034f,0.0154662914031034f};
-const float IIR3_TAP_A[] = {1.0f,-0.969067417193793f};
-// 10kHz filter @ Fs=1MHz
-// const float IIR3_TAP_B[] = {0.0304687470912538f,0.0304687470912538f};
-// const float IIR3_TAP_A[] = {1.0f,-0.939062505817492f};
-// 50kHz filter @ Fs=1MHz
-// const float IIR3_TAP_B[] = {0.136728735997320f,0.136728735997320f};
-// const float IIR3_TAP_A[] = {1.0f,-0.726542528005361f};
-const int IIR3_TAP_ORDER = sizeof(IIR3_TAP_B) / sizeof(float);
-
-#include "constellation.h"
-
+// N level crossing
 constexpr float N_levels[4] = {0.5f, 0.0f, -0.5f, -1.0f};
 constexpr int total_levels = 4;
 
-constexpr int INTEGRATE_DUMP_DELAY_SAMPLES = 5;
-
-CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
-:   block_size(_block_size),
-    filter_baseband(FIR1_TAP_B, FIR1_TAP_ORDER),
-    filter_ac(IIR1_TAP_B, IIR1_TAP_A, IIR1_TAP_ORDER),
-    filter_agc(),
-    pll_error_lpf(IIR2_TAP_B, IIR2_TAP_A, IIR2_TAP_ORDER),
-    ted_error_lpf(IIR3_TAP_B, IIR3_TAP_A, IIR3_TAP_ORDER),
-    integrate_dump_trigger_delay_line(INTEGRATE_DUMP_DELAY_SAMPLES),
-    I_zcd(N_levels, total_levels),
-    Q_zcd(N_levels, total_levels)
+CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(CarrierDemodulatorSpecification _spec)
+: spec(_spec) 
 {
-    // allocate our buffers
-    buffers = new CarrierToSymbolDemodulatorBuffers(block_size);
-
     // calculate constants
-    // Fs = 250e3;
-    // Fs = 2e6;
-    Fs = 2e6;
-    Ts = 1.0f/Fs;
-    // Fsymbol = 50e3;
-    // Fsymbol = 71.42e3;
-    Fsymbol = 83.33e3;
-    Tsymbol = 1/Fsymbol;
-    Nsymbol = (int)std::floorf(Fs/Fsymbol);
-
-    // setup our control loop
-    // filter_agc.target_power = QAM_Constellation_Average_Power;
     {
+        Fs = spec.f_sample;
+        Ts = 1.0f/Fs;
+        Fsymbol = spec.f_symbol;
+        Tsymbol = 1/Fsymbol;
+        Nsymbol = (int)std::floorf(Fs/Fsymbol);
+    }
+
+    // baseband symbol filter
+    {
+        auto& s = spec.baseband_filter;
+        const float k = s.cutoff/(Fs/2.0f);
+        auto res = create_fir_lpf(k, s.M);
+        filter_baseband = new FIR_Filter<std::complex<float>>(res->b, res->N);
+        delete res;
+    }
+
+    // ac filter
+    {
+        auto& s = spec.ac_filter;
+        float AC_Filter_A[2] = {1.0f, -s.k};
+        filter_ac = new IIR_Filter<std::complex<float>>(AC_FILTER_B, AC_Filter_A, 2);
+    }
+
+    // agc
+    {
+        auto& s = spec.agc;
+        filter_agc.beta = s.beta;
+        filter_agc.current_gain = s.initial_gain;
+
         float avg_power = 0.0f;
         for (int i = 0; i < QAM_Constellation_Size; i++) {
             float I = QAM_Constellation[i].real();
@@ -115,38 +58,76 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(const int _block_size)
         avg_power = avg_power / (float)(QAM_Constellation_Size);
         filter_agc.target_power = avg_power;
     }
-    filter_agc.beta = 0.1f;
-    filter_agc.current_gain = 0.1f;
 
-    pll_mixer.integrator.KTs = Ts;
-    pll_mixer.fcenter = 0e3;
-    pll_mixer.fgain = -5e3;
-    pll_mixer.phase_error_gain = 8.0f/PI;
-    pll_error_prev = 0.0f;
-    pll_error_int.KTs = 1000.0f*Ts;
+    // carrier pll
+    {
+        auto& s = spec.carrier_pll;
+        pll_mixer.integrator.KTs = Ts;
+        pll_mixer.fcenter = s.f_center;
+        pll_mixer.fgain = -s.f_gain;
+        pll_mixer.phase_error_gain = s.phase_error_gain;
+    }
 
-    ted_clock.integrator.KTs = Ts;
-    ted_clock.fcenter = Fsymbol;
-    ted_clock.fgain = -10e3;
-    ted_error_prev = 0.0f;
-    ted_error_int.KTs = 0250.0f*Ts;
+    // carrier pll loop filter
+    {
+        auto& s = spec.carrier_pll_filter;
+        pll_error_prev = 0.0f;
+        pll_error_int.KTs = s.integrator_gain*Ts;
+
+        const float k = s.butterworth_cutoff/(Fs/2.0f);
+        auto res = create_iir_single_pole_lpf(k);
+        pll_error_lpf = new IIR_Filter<float>(res->b, res->a, res->N);
+        delete res;
+    }
+
+    // ted
+    {
+        auto& s = spec.ted_pll;
+        ted_clock.integrator.KTs = Ts;
+        ted_clock.fcenter = Fsymbol + s.f_offset;
+        ted_clock.fgain = -s.f_gain;
+        ted_clock.phase_error_gain = s.phase_error_gain;
+    }
+
+    // ted pll loop filter
+    {
+        auto& s = spec.ted_pll_filter;
+        ted_error_prev = 0.0f;
+        ted_error_int.KTs = s.integrator_gain*Ts;
+
+        const float k = s.butterworth_cutoff/(Fs/2.0f);
+        auto res = create_iir_single_pole_lpf(k);
+        ted_error_lpf = new IIR_Filter<float>(res->b, res->a, res->N);
+        delete res;
+    }
+
+    I_zcd = new N_Level_Crossing_Detector(N_levels, total_levels);
+    Q_zcd = new N_Level_Crossing_Detector(N_levels, total_levels);
 
     zcd_cooldown.N_cooldown = (int)std::floorf(Nsymbol*0.0f);
-
     integrate_dump_filter.KTs = Ts/Tsymbol;
 }
 
 CarrierToSymbolDemodulator::~CarrierToSymbolDemodulator()
 {
-    delete buffers;
+    delete filter_baseband;
+    delete filter_ac;
+    delete pll_error_lpf;
+    delete ted_error_lpf;
+    delete I_zcd;
+    delete Q_zcd;
 }
 
 int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::complex<float>* y)
 {
-    //TODO: test variables
+    if (buffers == NULL) {
+        return -1;
+    }
+
     float thresh_acquire_error = 0.3f; // max distance allowed for a valid symbol reading
     const bool use_all_points = false;
 
+    const int block_size = buffers->block_size;
     int total_symbols = 0;
 
     for (int i = 0, j = 0; i < block_size; i++, j+=2) {
@@ -159,83 +140,20 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
     // per block filtering
     {
         auto filter_out = buffers->x_filtered;
-        filter_baseband.process(buffers->x_in, filter_out, block_size);
-        filter_ac.process(filter_out, filter_out, block_size);
+        filter_baseband->process(buffers->x_in, filter_out, block_size);
+        filter_ac->process(filter_out, filter_out, block_size);
         filter_agc.process(filter_out, filter_out, block_size);
     }
 
-    // per sample control loop
+    // carrier pll
     for (int i = 0; i < block_size; i++) {
         // get augmented value from pll mixer
         const auto IQ_raw = buffers->x_filtered[i];
         const auto IQ_mixer_out = pll_mixer.update();
         const auto IQ_pll = IQ_raw * IQ_mixer_out;
 
-        // zero crossing detector
-        bool is_zero_crossing = false;
-        {
-            is_zero_crossing = I_zcd.process(IQ_pll.real()) || is_zero_crossing;
-            is_zero_crossing = Q_zcd.process(IQ_pll.imag()) || is_zero_crossing;
-            is_zero_crossing = zcd_cooldown.on_trigger(is_zero_crossing);
-        } 
-
-        // if zero crossing detector triggered, update the phase error into the ted clock
-        float ted_timing_error = ted_clock.get_timing_error();
-        if (!is_zero_crossing) {
-            ted_timing_error = ted_error_prev;
-        }             
-        ted_error_prev = ted_timing_error;
-        {
-            float y = 0.0f;
-            ted_error_lpf.process(&ted_error_prev, &y, 1);
-            ted_error_int.process(y);
-            ted_error_int.yn = std::max(std::min(ted_error_int.yn, 1.0f), -1.0f);
-            ted_clock.phase_error = y + ted_error_int.yn;
-            // ted_clock.phase_error = y;
-        }
-
-        // if (is_zero_crossing) {
-        //     ted_error_lpf.process(&ted_timing_error, &ted_clock.phase_error, 1);
-        // } 
-
-        // propagate the trigger pulse into delay line
-        bool is_ted_clock_trigger = ted_clock.update();
-        // if (is_ted_clock_trigger) {
-        //     // convert timing error to sample delay for integrate and dump trigger
-        //     // a negative timing error means that ramp trigger occurs before half symbol point
-        //     // int Ndelay = Nsymbol + (int)ceilf(Nsymbol*0.5f*ted_timing_error);
-        //     int Ndelay = 1;
-        //     bool is_added = integrate_dump_trigger_delay_line.add(Ndelay+1);
-        //     // this gets triggered if we our timing error detector is triggering too fast
-        //     assert(is_added);
-        // }
-
         float pll_phase_error = pll_error_prev;
 
-        // integrate and dump filter
-        // on the trigger, we dump the filter
-        // and estimate the phase error of the constellation and pass it to the carrier pll
-        integrate_dump_filter.process(IQ_pll);
-        // bool is_integrate_dump_trigger = integrate_dump_trigger_delay_line.process();
-        bool is_integrate_dump_trigger = is_ted_clock_trigger;
-        if (is_integrate_dump_trigger) {
-            auto IQ_out = integrate_dump_filter.yn;
-            integrate_dump_filter.yn = std::complex<float>(0.0f, 0.0f);
-            y_sym_out = IQ_out;
-
-            // place our demodulated symbol into the output buffer
-            y[total_symbols++] = IQ_out;
-
-            // // estimate the phase of the IQ output
-            // auto res = estimate_phase_error(IQ_out, QAM_Constellation, QAM_Constellation_Size);
-            // if (res.mag_error < thresh_acquire_error) {
-            //     pll_phase_error = res.phase_error;
-            // }
-        // NOTE: if we do not have an integrator+dump output, we will still try to estimate a symbol
-        // this is because introducing the zero-order hold filter from the integrate+dump
-        // will produce phase noise in the PLL due to the one symbol delay 
-        } 
-        
         {
             const auto A = std::abs(IQ_pll);
             auto res = estimate_phase_error(IQ_pll, QAM_Constellation, QAM_Constellation_Size);
@@ -248,20 +166,74 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
         pll_error_prev = pll_phase_error;
         {
             float y = 0;
-            pll_error_lpf.process(&pll_error_prev, &y, 1);
+            pll_error_lpf->process(&pll_error_prev, &y, 1);
             pll_error_int.process(y);
             pll_error_int.yn = std::max(std::min(pll_error_int.yn, 1.0f), -1.0f);
             pll_mixer.phase_error = y + pll_error_int.yn;
         }
 
-        // place all of our data into the buffer
         buffers->x_pll_out[i] = IQ_pll;
-        buffers->y_sym_out[i] = y_sym_out;
+        buffers->error_pll[i] = pll_mixer.phase_error;
+    }
+
+    // zero crossing detector on pll output
+    for (int i = 0; i < block_size; i++) {
+        auto& IQ_pll = buffers->x_pll_out[i];
+
+        bool is_zero_crossing = false;
+        {
+            is_zero_crossing = I_zcd->process(IQ_pll.real()) || is_zero_crossing;
+            is_zero_crossing = Q_zcd->process(IQ_pll.imag()) || is_zero_crossing;
+            is_zero_crossing = zcd_cooldown.on_trigger(is_zero_crossing);
+        } 
+
         buffers->trig_zero_crossing[i] = is_zero_crossing;
+    }
+
+    // timing error detector and ted clock trigger
+    for (int i = 0; i < block_size; i++) {
+        auto& IQ_pll = buffers->x_pll_out[i];
+        auto is_zero_crossing = buffers->trig_zero_crossing[i];
+
+        // if zero crossing detector triggered, update the phase error into the ted clock
+        float ted_timing_error = ted_clock.get_timing_error();
+        if (!is_zero_crossing) {
+            ted_timing_error = ted_error_prev;
+        }             
+        ted_error_prev = ted_timing_error;
+
+        // propagate ted error into pll
+        {
+            float y = 0.0f;
+            ted_error_lpf->process(&ted_error_prev, &y, 1);
+            ted_error_int.process(y);
+            ted_error_int.yn = std::max(std::min(ted_error_int.yn, 1.0f), -1.0f);
+            ted_clock.phase_error = y + ted_error_int.yn;
+        }
+
+        bool is_ted_clock_trigger = ted_clock.update();
+        bool is_integrate_dump_trigger = is_ted_clock_trigger;
+
         buffers->trig_ted_clock[i] = is_ted_clock_trigger;
         buffers->trig_integrator_dump[i] = is_integrate_dump_trigger;
-        buffers->error_pll[i] = pll_mixer.phase_error;
         buffers->error_ted[i] = ted_clock.phase_error;
+    }
+
+    // integrate and dump filter
+    for (int i = 0; i < block_size; i++) {
+        auto& IQ_pll = buffers->x_pll_out[i];
+        auto is_integrate_dump_trigger = buffers->trig_integrator_dump[i];
+
+        integrate_dump_filter.process(IQ_pll);
+        if (is_integrate_dump_trigger) {
+            auto IQ_out = integrate_dump_filter.yn;
+            integrate_dump_filter.yn = std::complex<float>(0.0f, 0.0f);
+            y_sym_out = IQ_out;
+            y[total_symbols++] = IQ_out;
+        } 
+        
+        // place all of our data into the buffer
+        buffers->y_sym_out[i] = y_sym_out;
     }
 
     return total_symbols;
