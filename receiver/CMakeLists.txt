@@ -5,6 +5,8 @@ set(CMAKE_MODULE_PATH "${CMAKE_MODULE_PATH};${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(imgui REQUIRED)
 find_package(implot REQUIRED)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast")
+
 set(SRC_FILES
     src/filters.h
     src/carrier_dsp_blocks.cpp
