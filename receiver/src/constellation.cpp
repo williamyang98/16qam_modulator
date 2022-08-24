@@ -9,6 +9,7 @@ SquareConstellation::SquareConstellation(const int _L)
 {
     C = new std::complex<float>[N];
     phase_lookup = new float[N];
+    gray_code = new uint8_t[N];
 
     const float offset = (L-1)/2.0f;
     const float scale = 1.0f/std::sqrtf(2.0f) * 1.0f/offset * 0.5f;
@@ -28,12 +29,26 @@ SquareConstellation::SquareConstellation(const int _L)
         phase_lookup[i] = std::atan2f(c.real(), c.imag());
     }
 
+    // generate gray code
+    // TODO: generalise this?
+    uint8_t _gray_code[4] = {0b00, 0b01, 0b11, 0b10};
+    for (uint8_t i = 0; i < L; i++) {
+        for (uint8_t q = 0; q < L; q++) {
+            uint8_t I = _gray_code[i];
+            uint8_t Q = _gray_code[q];
+            uint8_t idx = (i<<2) | q;
+            uint8_t sym = (I<<2) | Q;
+            gray_code[idx] = sym;
+        }
+    }
+
     m_avg_power = CalculateAveragePower(C, N);
 }
 
 SquareConstellation::~SquareConstellation() {
     delete [] C;
     delete [] phase_lookup;
+    delete [] gray_code;
 }
 
 uint8_t SquareConstellation::GetNearestSymbol(const std::complex<float> x) {
@@ -49,7 +64,7 @@ uint8_t SquareConstellation::GetNearestSymbol(const std::complex<float> x) {
         }
     }
 
-    return best_match;
+    return gray_code[best_match];
 }
 
 float SquareConstellation::CalculateAveragePower(const std::complex<float>* C, const int N) {

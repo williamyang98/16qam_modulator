@@ -21,6 +21,7 @@ private:
     const int N;
     std::complex<float>* C;
     float* phase_lookup;
+    uint8_t* gray_code;
     float m_avg_power;
 public:
     // L = number of symbols along one axis

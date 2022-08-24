@@ -27,9 +27,8 @@ const uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
 const uint16_t SCRAMBLER_CODE = 0b1000010101011001;
 const uint8_t CRC8_POLY = 0xD5;
 
-// We are outputing 4QAM onto pins 4 to 7 which are on 0xF0 PORTD
-// index = [00, 01, 10, 11] = I|Q ==> I=0b1100, Q=0b0011
-const uint8_t qam_data[4] = {0b00000000, 0b11000000, 0b00110000, 0b11110000};
+// Generate gray coding for better FEC
+uint8_t GRAY_CODE[16] = {0};
 
 // Formula for encoded frame size
 // N (payload), 2 (length), 1 (crc8), 1 (zero byte for trellis terminator)
@@ -187,7 +186,7 @@ int main(void)
 		// NOTE: This cannot take too long otherwise we have a half-written packet used for transmit
 		uint8_t* tx_buf = TX_BUFFER_WR;
 		generate_packet(ADC_BUFFER_RD, ADC_BUFFER_SIZE, &tx_buf[0]);
-		generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[ADC_ENC_FRAME_SIZE*2]);
+		//generate_packet(SAMPLE_MESSAGE, SAMPLE_MESSAGE_LENGTH, &tx_buf[ADC_ENC_FRAME_SIZE*2]);
 		
 		#if DEBUG_SIGNALS
 		DEBUG_PORT &= ~(1 << DEBUG_PIN_ENCODING);
@@ -197,10 +196,25 @@ int main(void)
 
 // Pre-encode as much as possible prior to real-time encoding
 void generate_preencodings() {
+	// generate gray code for 2D
+	uint8_t _gray_code[4] = {0b00, 0b01, 0b11, 0b10}; // 1D gray code
+	for (uint8_t i = 0; i < 4; i++) {
+		for (uint8_t q = 0; q < 4; q++) {
+			uint8_t I = _gray_code[i];
+			uint8_t Q = _gray_code[q];
+			uint8_t idx = (i<<2) | q;
+			uint8_t sym = (I<<2) | Q;
+			// shift by 4 bits to align with output pins
+			GRAY_CODE[idx] = sym << 4;
+		}
+	}
+	
+	
 	// Unpack preamble into 4bit chunks for 16QAM
 	for (int i = 0; i < PREAMBLE_UNPACKED_SIZE; i++) {
 		const int shift = (PREAMBLE_UNPACKED_SIZE-1-i)*4;
-		PREAMBLE_CODE_UNPACKED[i] = ((PREAMBLE_CODE >> shift) & 0x0F) << 4;
+		const uint8_t bits = (PREAMBLE_CODE >> shift) & 0x0F;
+		PREAMBLE_CODE_UNPACKED[i] = GRAY_CODE[bits];
 	}
 	
 	// Copy preamble code into known locations
@@ -260,9 +274,9 @@ int generate_packet(uint8_t* x, const int N, uint8_t* y0) {
 	int k = PREAMBLE_UNPACKED_SIZE;
 	for (int i = 0; i < offset; i++) {
 		uint8_t b = scrambler_process(y[i]);
-		y0[k] = b;
+		y0[k] = GRAY_CODE[b >> 4];
 		k = k+1;
-		y0[k] = b << 4;
+		y0[k] = GRAY_CODE[b & 0x0F];
 		k = k+1;
 	}
 	
