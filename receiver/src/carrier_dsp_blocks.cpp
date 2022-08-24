@@ -17,7 +17,7 @@ std::complex<float> PLL_mixer::update(void) {
     control = std::max(std::min(control, 1.0f), -1.0f);
     float freq = fcenter + control*fgain;
     float t = integrator.process(2.0f*PI*freq);
-    t = fmodf(t, 2*PI);
+    t = std::fmodf(t, 2.0f*PI);
     integrator.yn = t;
 
     float I = std::cosf(t);

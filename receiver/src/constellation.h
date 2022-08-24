@@ -5,6 +5,9 @@
 
 class ConstellationSpecification {
 public:
+    // NOTE: We need a phase lookup if we are using the constellation in a decision directed loop
+    // This because the atan2 calculation is extremely slow, and having this precomputed is better
+    virtual float* GetPhaseLookup() = 0;
     virtual std::complex<float>* GetSymbols() = 0;
     virtual int GetSize() = 0;
     virtual int GetBitsPerSymbol() = 0;
@@ -17,6 +20,7 @@ private:
     const int L;
     const int N;
     std::complex<float>* C;
+    float* phase_lookup;
     float m_avg_power;
 public:
     // L = number of symbols along one axis
@@ -24,6 +28,7 @@ public:
     SquareConstellation(const int _L);
     ~SquareConstellation();
     virtual std::complex<float>* GetSymbols() { return C; }
+    virtual float* GetPhaseLookup() { return phase_lookup; }
     virtual int GetSize() { return N; };
     virtual int GetBitsPerSymbol() { return L; };
     virtual float GetAveragePower() { return m_avg_power; }; 
@@ -45,4 +50,4 @@ struct ConstellationErrorResult
 ConstellationErrorResult 
 estimate_phase_error(
     const std::complex<float> x, 
-    const std::complex<float>* C, const int N);
+    ConstellationSpecification* s);

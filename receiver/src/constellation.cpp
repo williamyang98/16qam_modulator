@@ -8,6 +8,7 @@ SquareConstellation::SquareConstellation(const int _L)
 : L(_L), N(_L*_L) 
 {
     C = new std::complex<float>[N];
+    phase_lookup = new float[N];
 
     const float offset = (L-1)/2.0f;
     const float scale = 1.0f/std::sqrtf(2.0f) * 1.0f/offset * 0.5f;
@@ -21,11 +22,18 @@ SquareConstellation::SquareConstellation(const int _L)
             C[idx] = sym * scale;
         }
     }
+
+    for (int i = 0; i < N; i++) {
+        auto& c = C[i];
+        phase_lookup[i] = std::atan2f(c.real(), c.imag());
+    }
+
     m_avg_power = CalculateAveragePower(C, N);
 }
 
 SquareConstellation::~SquareConstellation() {
     delete [] C;
+    delete [] phase_lookup;
 }
 
 uint8_t SquareConstellation::GetNearestSymbol(const std::complex<float> x) {
@@ -56,10 +64,16 @@ float SquareConstellation::CalculateAveragePower(const std::complex<float>* C, c
     return avg_power;
 }
 
+static float* phase_cache = NULL;
+
 // get the phase error from the known constellation
-ConstellationErrorResult estimate_phase_error(const std::complex<float> x, const std::complex<float>* C, const int N) {
+ConstellationErrorResult estimate_phase_error(const std::complex<float> x, ConstellationSpecification* s) {
     int min_index = 0;
     float best_mag_error = INFINITY;
+    const int N = s->GetSize();
+    const auto C = s->GetSymbols();
+    const auto P = s->GetPhaseLookup();
+
     for (int i = 0; i < N; i++) {
         auto error = x - C[i];
         auto I = error.real();
@@ -73,15 +87,15 @@ ConstellationErrorResult estimate_phase_error(const std::complex<float> x, const
     }
 
     const auto closest_point = C[min_index];
-    const float angle1 = std::atan2f(closest_point.real(), closest_point.imag());
+    // const float angle1 = std::atan2f(closest_point.real(), closest_point.imag());
+    const float angle1 = P[min_index];
     const float angle2 = std::atan2f(x.real(), x.imag());
 
     float phase_error = angle1-angle2;
     phase_error = std::fmodf(phase_error + 3*PI, 2*PI);
     phase_error -= PI;
 
-    float mag_error = std::abs(closest_point) - std::abs(x);
-    mag_error = std::abs(mag_error);
+    best_mag_error = std::sqrtf(best_mag_error);
 
-    return {phase_error, mag_error};
+    return {phase_error, best_mag_error};
 }
