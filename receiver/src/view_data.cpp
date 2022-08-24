@@ -25,7 +25,10 @@
 #include "constellation.h"
 #include "filter_designer.h"
 
-#define PRINT_LOG 1
+#include <io.h>
+#include <fcntl.h>
+
+#define PRINT_LOG 0
 #if PRINT_LOG 
   #define LOG_MESSAGE(...) fprintf(stderr, ##__VA_ARGS__)
 #else
@@ -83,7 +86,7 @@ void demodulator_thread(
     CarrierToSymbolDemodulatorBuffers* demod_buffer, CarrierToSymbolDemodulatorBuffers* snapshot_buffer, 
     CarrierDemodulatorSpecification* spec, ConstellationSpecification* constellation,
     bool* snapshot_trigger,
-    AudioData* aud_data, int* audio_gain) 
+    AudioData* aud_data, int16_t* audio_gain) 
 {
     const int ds_block_size = block_size*ds_factor;
 
@@ -123,11 +126,24 @@ void demodulator_thread(
     const int audio_payload_length = 100;
     const int message_metadata_length = 13;
 
-    const float ds_k = (spec->f_sample/2.0f)/(spec->f_sample*ds_factor/2.0f);
+    float ds_k = (spec->f_sample/2.0f)/(spec->f_sample*ds_factor/2.0f);
+    if (ds_factor == 1) {
+        ds_k = 0.9f;
+    }
     auto ds_filter_spec = create_fir_lpf(ds_k, 50);
     FIR_Filter<std::complex<float>> ds_filter(ds_filter_spec->b, ds_filter_spec->N);
 
-    auto payload_handler = [&aud_data, &curr_audio_buffer_index, &audio_gain, audio_payload_length](uint8_t* x, const uint16_t N) {
+    constexpr float AC_FILTER_B[] = {1.0f, -1.0f};
+    constexpr float AC_FILTER_A[] = {1.0f, -0.999999f};
+    IIR_Filter<int16_t> audio_ac_filter(AC_FILTER_B, AC_FILTER_A, 2);
+    int16_t* ac_audio_buffer = new int16_t[audio_payload_length];
+
+    auto payload_handler = [
+        &aud_data, &curr_audio_buffer_index, 
+        &audio_gain, audio_payload_length,
+        &audio_ac_filter, &ac_audio_buffer]
+        (uint8_t* x, const uint16_t N) 
+    {
         // if not an audio block
         if (N != audio_payload_length) {
             LOG_MESSAGE("message=%.*s\n", N, x);
@@ -135,14 +151,22 @@ void demodulator_thread(
         }
 
         for (int i = 0; i < N; i++) {
+            uint16_t v = x[i];
+            v = v - 128;
+            v = v * 64;
+            ac_audio_buffer[i] = v;
+        }
+
+        audio_ac_filter.process(ac_audio_buffer, ac_audio_buffer, N);
+
+        const int16_t audio_gain_val = *audio_gain;
+
+        for (int i = 0; i < N; i++) {
             const uint8_t v = x[i];
             aud_data->audio_buffer[curr_audio_buffer_index] = v;
 
-
             // amplify the signal
-            int16_t v0 = static_cast<int16_t>(v);
-            v0 = v0 - 128;
-            v0 = v0 * (*audio_gain);
+            const int16_t v0 = ac_audio_buffer[i] * audio_gain_val;
             aud_data->pcm_buffer[curr_audio_buffer_index] = v0;
 
             if (curr_audio_buffer_index == (aud_data->audio_buffer_size-1)) {
@@ -152,9 +176,9 @@ void demodulator_thread(
         }
     };
 
-    size_t rd_block_size = 0;
     int rd_total_blocks = 0;
-    while ((rd_block_size = fread(IQ_mod_buffer, sizeof(std::complex<uint8_t>), ds_block_size, fp)) > 0) {
+    while (true) {
+        size_t rd_block_size = fread(IQ_mod_buffer, sizeof(std::complex<uint8_t>), ds_block_size, fp);
         if (rd_block_size != ds_block_size) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
             // if we are reading from a file, repeat
@@ -247,6 +271,12 @@ int main(int argc, char** argv)
 {
     // app startup
     FILE* fp_in = stdin;
+
+    // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
+    // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
+    freopen(NULL, "wb", stdout);
+    _setmode(fileno(stdout), _O_BINARY);
+
     if (argc > 1) {
         FILE* tmp = NULL;
         fopen_s(&tmp, argv[1], "r");
@@ -256,6 +286,11 @@ int main(int argc, char** argv)
         } 
         fp_in = tmp;
     }
+
+    // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
+    // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
+    freopen(NULL, "rb", fp_in);
+    _setmode(fileno(fp_in), _O_BINARY);
 
     // const int block_size = 4096;
     const int ds_factor = 1;
@@ -296,7 +331,10 @@ int main(int argc, char** argv)
 
     // save demodulated audio
     const int audio_buffer_size = (int)(std::ceilf(Faudio));
-    int audio_gain = 16;
+
+    const int16_t audio_gain_min = 0;
+    const int16_t audio_gain_max = 32;
+    int16_t audio_gain = 8;
     auto aud_data = AudioData(audio_buffer_size);
     
     auto demod_thread = std::thread(
@@ -456,6 +494,18 @@ int main(int argc, char** argv)
         }
         ImGui::End();
 
+        ImGui::Begin("PCM 16Bit Buffer");
+        if (ImPlot::BeginPlot("##Audio buffer")) {
+            static double y0 = static_cast<double>(INT16_MAX);
+            static double y1 = static_cast<double>(INT16_MIN);
+            ImPlot::SetupAxisLimits(ImAxis_Y1, y1, y0, ImPlotCond_Once);
+            ImPlot::PlotLine("Audio", aud_data.pcm_buffer, aud_data.audio_buffer_size);
+            ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
+            ImPlot::DragLineY(1, &y1, ImVec4(1,0,0,1), 1);
+            ImPlot::EndPlot();
+        }
+        ImGui::End();
+
 
         if (ImGui::Begin("Controls")) {
             const bool is_rendering_snapshot = (render_buffer == snapshot_buffer);
@@ -472,7 +522,10 @@ int main(int argc, char** argv)
 
             // ImGui::SliderFloat("Symbol frequency scaler", &demod.ted_clock.fcenter_factor, 0.0f, 2.0f);
             // ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
-            ImGui::SliderInt("Audio gain", &audio_gain, 0, 128);
+            int audio_gain_val = audio_gain;
+            if (ImGui::SliderInt("Audio gain", &audio_gain_val, audio_gain_min, audio_gain_max)) {
+                audio_gain = audio_gain_val;
+            }
             ImGui::End();
         }
 
