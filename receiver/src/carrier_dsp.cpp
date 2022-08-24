@@ -150,7 +150,7 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
 
         {
             const auto A = std::abs(IQ_pll);
-            auto res = estimate_phase_error(IQ_pll, constellation->GetSymbols(), constellation->GetSize());
+            auto res = estimate_phase_error(IQ_pll, constellation);
             if (res.mag_error < thresh_acquire_error) {
                 pll_phase_error = res.phase_error;
             }
@@ -166,28 +166,12 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
             pll_mixer.phase_error = y + pll_error_int.yn;
         }
 
-        buffers->x_pll_out[i] = IQ_pll;
-        buffers->error_pll[i] = pll_mixer.phase_error;
-    }
-
-    // zero crossing detector on pll output
-    for (int i = 0; i < block_size; i++) {
-        auto& IQ_pll = buffers->x_pll_out[i];
-
         bool is_zero_crossing = false;
         {
             is_zero_crossing = I_zcd->process(IQ_pll.real()) || is_zero_crossing;
             is_zero_crossing = Q_zcd->process(IQ_pll.imag()) || is_zero_crossing;
             is_zero_crossing = zcd_cooldown.on_trigger(is_zero_crossing);
         } 
-
-        buffers->trig_zero_crossing[i] = is_zero_crossing;
-    }
-
-    // timing error detector and ted clock trigger
-    for (int i = 0; i < block_size; i++) {
-        auto& IQ_pll = buffers->x_pll_out[i];
-        auto is_zero_crossing = buffers->trig_zero_crossing[i];
 
         // if zero crossing detector triggered, update the phase error into the ted clock
         float ted_timing_error = ted_clock.get_timing_error();
@@ -208,16 +192,7 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
         bool is_ted_clock_trigger = ted_clock.update();
         bool is_integrate_dump_trigger = is_ted_clock_trigger;
 
-        buffers->trig_ted_clock[i] = is_ted_clock_trigger;
-        buffers->trig_integrator_dump[i] = is_integrate_dump_trigger;
-        buffers->error_ted[i] = ted_clock.phase_error;
-    }
-
-    // integrate and dump filter
-    for (int i = 0; i < block_size; i++) {
-        auto& IQ_pll = buffers->x_pll_out[i];
-        auto is_integrate_dump_trigger = buffers->trig_integrator_dump[i];
-
+        // get symbols from int+dump filter
         integrate_dump_filter.process(IQ_pll);
         if (is_integrate_dump_trigger) {
             auto IQ_out = integrate_dump_filter.yn;
@@ -227,6 +202,12 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
         } 
         
         // place all of our data into the buffer
+        buffers->x_pll_out[i] = IQ_pll;
+        buffers->error_pll[i] = pll_mixer.phase_error;
+        buffers->trig_zero_crossing[i] = is_zero_crossing;
+        buffers->trig_ted_clock[i] = is_ted_clock_trigger;
+        buffers->trig_integrator_dump[i] = is_integrate_dump_trigger;
+        buffers->error_ted[i] = ted_clock.phase_error;
         buffers->y_sym_out[i] = y_sym_out;
     }
 
