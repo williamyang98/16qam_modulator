@@ -33,6 +33,6 @@ public:
     }
 
     virtual int get_length() {
-        return sizeof(T);
+        return sizeof(T)*8;
     }
 };
