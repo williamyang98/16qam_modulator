@@ -23,6 +23,7 @@
 #include "carrier_dsp.h"
 #include "frame_synchroniser.h"
 #include "constellation.h"
+#include "filter_designer.h"
 
 #define PRINT_LOG 1
 #if PRINT_LOG 
@@ -78,15 +79,16 @@ public:
 
 void demodulator_thread(
     FILE* fp, 
-    const int block_size, 
+    const int ds_factor, const int block_size, 
     CarrierToSymbolDemodulatorBuffers* demod_buffer, CarrierToSymbolDemodulatorBuffers* snapshot_buffer, 
     CarrierDemodulatorSpecification* spec, ConstellationSpecification* constellation,
     bool* snapshot_trigger,
     AudioData* aud_data, int* audio_gain) 
 {
+    const int ds_block_size = block_size*ds_factor;
 
     // quick map into buffers
-    auto IQ_mod_buffer = new std::complex<uint8_t>[block_size];
+    auto IQ_mod_buffer = new std::complex<uint8_t>[ds_block_size];
     auto IQ_demod_buffer = new std::complex<float>[block_size];
 
     const int audio_buffer_size = aud_data->audio_buffer_size;
@@ -114,11 +116,16 @@ void demodulator_thread(
     auto demod = new CarrierToSymbolDemodulator(*spec, constellation);
     demod->buffers = demod_buffer;
 
+    auto x_in_buffer = new std::complex<float>[ds_block_size];
 
     int curr_audio_buffer_index = 0;
 
     const int audio_payload_length = 100;
     const int message_metadata_length = 13;
+
+    const float ds_k = (spec->f_sample/2.0f)/(spec->f_sample*ds_factor/2.0f);
+    auto ds_filter_spec = create_fir_lpf(ds_k, 50);
+    FIR_Filter<std::complex<float>> ds_filter(ds_filter_spec->b, ds_filter_spec->N);
 
     auto payload_handler = [&aud_data, &curr_audio_buffer_index, &audio_gain, audio_payload_length](uint8_t* x, const uint16_t N) {
         // if not an audio block
@@ -147,8 +154,8 @@ void demodulator_thread(
 
     size_t rd_block_size = 0;
     int rd_total_blocks = 0;
-    while ((rd_block_size = fread(IQ_mod_buffer, 2*sizeof(uint8_t), block_size, fp)) > 0) {
-        if (rd_block_size != block_size) {
+    while ((rd_block_size = fread(IQ_mod_buffer, sizeof(std::complex<uint8_t>), ds_block_size, fp)) > 0) {
+        if (rd_block_size != ds_block_size) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
             // if we are reading from a file, repeat
             if (fp != stdin) {
@@ -157,7 +164,23 @@ void demodulator_thread(
             continue;
         }
         rd_total_blocks++; 
-        const auto total_symbols = demod->ProcessBlock(IQ_mod_buffer, IQ_demod_buffer);
+
+        for (int i = 0; i < ds_block_size; i++) {
+            const uint8_t I = IQ_mod_buffer[i].real();
+            const uint8_t Q = IQ_mod_buffer[i].imag();
+            x_in_buffer[i].real((float)I - 127.5f);
+            x_in_buffer[i].imag((float)Q - 127.5f);
+        }
+
+        if (ds_factor != 1) {
+            ds_filter.process(x_in_buffer, x_in_buffer, ds_block_size);
+            for (int i = 0; i < block_size; i++) {
+                x_in_buffer[i] = x_in_buffer[i*ds_factor];
+            }
+        }
+
+        const int total_symbols = demod->ProcessBlock(x_in_buffer, IQ_demod_buffer);
+
         for (int i = 0; i < total_symbols; i++) {
             const auto IQ = IQ_demod_buffer[i];
             const auto res = frame_sync->process(IQ);
@@ -210,6 +233,7 @@ void demodulator_thread(
     
     delete [] IQ_mod_buffer;
     delete [] IQ_demod_buffer;
+    delete [] x_in_buffer;
     delete frame_decoder;
     delete scrambler;
     delete crc8_calc;
@@ -234,9 +258,10 @@ int main(int argc, char** argv)
     }
 
     // const int block_size = 4096;
-    const int block_size = 8192;
-    const float Fsample = 2e6;
-    const float Fsymbol = 88e3;
+    const int ds_factor = 1;
+    const int block_size = 8192 / ds_factor;
+    const float Fsample = 1e6 / (float)(ds_factor);
+    const float Fsymbol = 87e3;
     const float Faudio = Fsymbol/5.0f;
 
     CarrierDemodulatorSpecification spec;
@@ -245,17 +270,17 @@ int main(int argc, char** argv)
 
         spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
-        spec.baseband_filter.cutoff = Fsymbol*4;
-        spec.baseband_filter.M = 20;
+        spec.baseband_filter.cutoff = Fsymbol;
+        spec.baseband_filter.M = 10;
         spec.ac_filter.k = 0.99999f;
         spec.agc.beta = 0.1f;
         spec.agc.initial_gain = 0.1f;
         spec.carrier_pll.f_center = 0e3;
-        spec.carrier_pll.f_gain = 10e3;
+        spec.carrier_pll.f_gain = 2.5e3;
         spec.carrier_pll.phase_error_gain = 8.0f/PI;
         spec.carrier_pll_filter.butterworth_cutoff = 5e3;
         spec.carrier_pll_filter.integrator_gain = 1000.0f;
-        spec.ted_pll.f_gain = 10e3;
+        spec.ted_pll.f_gain = 5e3;
         spec.ted_pll.f_offset = 0e3;
         spec.ted_pll.phase_error_gain = 1.0f;
         spec.ted_pll_filter.butterworth_cutoff = 10e3;
@@ -276,7 +301,7 @@ int main(int argc, char** argv)
     
     auto demod_thread = std::thread(
         demodulator_thread, 
-        fp_in, 
+        fp_in, ds_factor,
         block_size, demod_buffer, snapshot_buffer, 
         &spec, constellation,
         &snapshot_trigger,

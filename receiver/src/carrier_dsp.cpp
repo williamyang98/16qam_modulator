@@ -18,7 +18,8 @@ constexpr int total_levels = 4;
 CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
     CarrierDemodulatorSpecification _spec,
     ConstellationSpecification* _constellation)
-: spec(_spec), constellation(_constellation) 
+: spec(_spec), constellation(_constellation),
+  delay_line(5)
 {
     // calculate constants
     {
@@ -99,7 +100,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
     Q_zcd = new N_Level_Crossing_Detector(N_levels, total_levels);
 
     zcd_cooldown.N_cooldown = (int)std::floorf(Nsymbol*0.0f);
-    integrate_dump_filter.KTs = Ts/Tsymbol;
+    // integrate_dump_filter.KTs = Ts/Tsymbol;
 }
 
 CarrierToSymbolDemodulator::~CarrierToSymbolDemodulator()
@@ -112,29 +113,22 @@ CarrierToSymbolDemodulator::~CarrierToSymbolDemodulator()
     delete Q_zcd;
 }
 
-int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::complex<float>* y)
+int CarrierToSymbolDemodulator::ProcessBlock(std::complex<float>* x, std::complex<float>* y)
 {
     if (buffers == NULL) {
         return -1;
     }
 
-    float thresh_acquire_error = 0.3f; // max distance allowed for a valid symbol reading
+    float thresh_acquire_error = 0.2f; // max distance allowed for a valid symbol reading
     const bool use_all_points = false;
 
     const int block_size = buffers->block_size;
     int total_symbols = 0;
 
-    for (int i = 0, j = 0; i < block_size; i++, j+=2) {
-        const uint8_t I = x[i].real();
-        const uint8_t Q = x[i].imag();
-        buffers->x_in[i].real((float)I - 127.5f);
-        buffers->x_in[i].imag((float)Q - 127.5f);
-    }
-
     // per block filtering
     {
         auto filter_out = buffers->x_filtered;
-        filter_baseband->process(buffers->x_in, filter_out, block_size);
+        filter_baseband->process(x, filter_out, block_size);
         filter_ac->process(filter_out, filter_out, block_size);
         filter_agc.process(filter_out, filter_out, block_size);
     }
@@ -148,13 +142,14 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
 
         float pll_phase_error = pll_error_prev;
 
-        {
-            const auto A = std::abs(IQ_pll);
-            auto res = estimate_phase_error(IQ_pll, constellation);
-            if (res.mag_error < thresh_acquire_error) {
-                pll_phase_error = res.phase_error;
-            }
-        }
+        // Run carrier phase estimation for every possible sample
+        // {
+        //     const auto A = std::abs(IQ_pll);
+        //     auto res = estimate_phase_error(IQ_pll, constellation);
+        //     if (res.mag_error < thresh_acquire_error) {
+        //         pll_phase_error = res.phase_error;
+        //     }
+        // }
 
         // pass new pll phase error through first order butterworth filter
         pll_error_prev = pll_phase_error;
@@ -190,15 +185,24 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<uint8_t>* x, std::comp
         }
 
         bool is_ted_clock_trigger = ted_clock.update();
-        bool is_integrate_dump_trigger = is_ted_clock_trigger;
+        if (is_ted_clock_trigger) {
+            delay_line.add(Nsymbol/2);
+        }
+        // bool is_integrate_dump_trigger = is_ted_clock_trigger;
+        bool is_integrate_dump_trigger = delay_line.process();
 
         // get symbols from int+dump filter
-        integrate_dump_filter.process(IQ_pll);
+        // integrate_dump_filter.process(IQ_pll);
         if (is_integrate_dump_trigger) {
-            auto IQ_out = integrate_dump_filter.yn;
-            integrate_dump_filter.yn = std::complex<float>(0.0f, 0.0f);
+            // auto IQ_out = integrate_dump_filter.yn;
+            // integrate_dump_filter.yn = std::complex<float>(0.0f, 0.0f);
+            auto IQ_out = IQ_pll;
             y_sym_out = IQ_out;
             y[total_symbols++] = IQ_out;
+
+            // Update carrier phase estimate for every sampled symbol
+            auto res = estimate_phase_error(IQ_pll, constellation);
+            pll_error_prev = res.phase_error;
         } 
         
         // place all of our data into the buffer
@@ -226,7 +230,8 @@ CarrierToSymbolDemodulatorBuffers::CarrierToSymbolDemodulatorBuffers(const int _
 
     // calculate size of all members
     size_t s0  = 0;
-    size_t s1 = s0 + align_memaddr(sizeof(std::complex<float>) * block_size);
+    // size_t s1 = s0 + align_memaddr(sizeof(std::complex<float>) * block_size);
+    size_t s1 = 0;
     size_t s2 = s1 + align_memaddr(sizeof(std::complex<float>) * block_size);
     size_t s3 = s2 + align_memaddr(sizeof(std::complex<float>) * block_size);
     size_t s4 = s3 + align_memaddr(sizeof(std::complex<float>) * block_size);
@@ -240,7 +245,7 @@ CarrierToSymbolDemodulatorBuffers::CarrierToSymbolDemodulatorBuffers(const int _
     data_allocate = new uint8_t[data_size];
 
     // cast with offsets to individual buffers
-    x_in = reinterpret_cast<std::complex<float>*>(&data_allocate[s0]);
+    // x_in = reinterpret_cast<std::complex<float>*>(&data_allocate[s0]);
     x_filtered = reinterpret_cast<std::complex<float>*>(&data_allocate[s1]);
     x_pll_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s2]);
     y_sym_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s3]);

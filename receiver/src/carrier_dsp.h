@@ -16,7 +16,6 @@ public:
 public:
     const int block_size;
     // IQ samples
-    std::complex<float>* x_in;
     std::complex<float>* x_filtered;
     // output of phased locked loop
     std::complex<float>* x_pll_out;
@@ -68,7 +67,8 @@ private:
     N_Level_Crossing_Detector* Q_zcd = NULL;
     Trigger_Cooldown zcd_cooldown;
     // integrate and dump filter
-    Integrator_Block<std::complex<float>> integrate_dump_filter;
+    Delay_Line delay_line;
+    // Integrator_Block<std::complex<float>> integrate_dump_filter;
     // keep track of last output symbol
     std::complex<float> y_sym_out;
     ConstellationSpecification* constellation = NULL;
@@ -77,5 +77,5 @@ public:
     ~CarrierToSymbolDemodulator();
     // return the number of symbols read into the buffer
     // x must be at least block_size large
-    int ProcessBlock(std::complex<uint8_t>* x, std::complex<float>* y);
+    int ProcessBlock(std::complex<float>* x, std::complex<float>* y);
 };
