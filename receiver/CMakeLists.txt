@@ -42,9 +42,16 @@ add_executable(replay_data
 include_directories(replay_data src/ src/getopt)
 set_target_properties(replay_data PROPERTIES CXX_STANDARD 17)
 
+add_executable(pcm_play
+    src/pcm_play.cpp
+    src/getopt/getopt.c)
+include_directories(pcm_play src/ src/getopt)
+set_target_properties(pcm_play PROPERTIES CXX_STANDARD 17)
+
 if (WIN32)
 target_compile_options(read_data PRIVATE "/MP")
 target_compile_options(view_data PRIVATE "/MP")
 target_compile_options(simulate_transmitter PRIVATE "/MP")
 target_compile_options(replay_data PRIVATE "/MP")
+target_compile_options(pcm_play PRIVATE "/MP")
 endif (WIN32)
