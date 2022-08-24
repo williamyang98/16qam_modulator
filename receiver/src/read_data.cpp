@@ -8,6 +8,9 @@
 #include "carrier_demodulator_spec.h"
 #include "frame_synchroniser.h"
 
+#include <io.h>
+#include <fcntl.h>
+
 #define PRINT_LOG 1
 
 #if PRINT_LOG 
@@ -23,6 +26,7 @@ constexpr uint32_t CRC8_POLY = 0xD5;
 
 int main(int argc, char **argv) {
     FILE* fp_in = stdin;
+
     if (argc > 1) {
         FILE* tmp = NULL;
         fopen_s(&tmp, argv[1], "r");
@@ -32,6 +36,12 @@ int main(int argc, char **argv) {
         } 
         fp_in = tmp;
     }
+
+    // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
+    // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
+    freopen(NULL, "rb", fp_in);
+    _setmode(fileno(fp_in), _O_BINARY);
+
 
     // carrier demodulator
     const float Fsymbol = 87e3;

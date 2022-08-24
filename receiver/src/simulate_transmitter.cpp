@@ -20,6 +20,9 @@
 
 #include "getopt/getopt.h"
 
+#include <io.h>
+#include <fcntl.h>
+
 struct IQ_Symbol {
     uint8_t I;
     uint8_t Q;
@@ -110,6 +113,11 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
+
+    // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
+    // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
+    freopen(NULL, "wb", stdout);
+    _setmode(fileno(stdout), _O_BINARY);
 
     uint8_t* test_data = NULL;
     int total_encoded = create_test_data(&test_data);
