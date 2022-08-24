@@ -23,8 +23,8 @@ public:
 
     void process(T* x, T* y, const int N) {
         for (int i = 0; i < N; i++) {
-            y[i] = 0.0f;
             xn[Ki] = x[i];
+            y[i] = 0.0f;
             for (int j = 0; j < K; j++) {
                 y[i] += xn[(K+Ki-j)%K] * b[j];
             }
