@@ -235,13 +235,15 @@ int main(int argc, char** argv)
 
     // const int block_size = 4096;
     const int block_size = 8192;
+    const float Fsample = 2e6;
+    const float Fsymbol = 88e3;
+    const float Faudio = Fsymbol/5.0f;
 
     CarrierDemodulatorSpecification spec;
     {
         const float PI = 3.1415f;
-        const float Fsymbol = 88e3;
 
-        spec.f_sample = 2e6;
+        spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
         spec.baseband_filter.cutoff = Fsymbol*4;
         spec.baseband_filter.M = 20;
@@ -268,7 +270,7 @@ int main(int argc, char** argv)
     bool snapshot_trigger = false;
 
     // save demodulated audio
-    const int audio_buffer_size = 10000;
+    const int audio_buffer_size = (int)(std::ceilf(Faudio));
     int audio_gain = 16;
     auto aud_data = AudioData(audio_buffer_size);
     

@@ -12,21 +12,21 @@
 void usage() {
     fprintf(stderr, 
         "replay_data, a application to replay pcm files in realtime\n"
-        "\t[-f samplerate (default: 1MHz)]\n"
-        "\t[-b block size (default: 1024)]\n"
+        "\t[-f samplerate (default: 2MHz)]\n"
+        "\t[-b block size (default: 65536)]\n"
         "\t[-i input filename (default: None)]\n"
         "\t    If no file is provided then stdin is used\n"
-        "\t[-l (toggle loop)]\n"
+        "\t[-l (disable loop)]\n"
         "\t[-h (show help)]\n"
     );
 }
 
 int main(int argc, char** argv) {
     int opt; 
-    float Fs = 1e6;
-    int block_size = 1024;
+    float Fs = 2e6;
+    int block_size = 65536;
     char* filename = NULL;
-    bool is_loop = false;
+    bool is_loop = true;
 
     while ((opt = getopt(argc, argv, "f:b:i:lh")) != -1) {
         switch (opt) {
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
             filename = optarg;
             break;
         case 'l':
-            is_loop = true;
+            is_loop = false;
             break;
         case 'h':
         default:
