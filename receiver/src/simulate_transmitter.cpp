@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
     int curr_block = 0;
     
     // number of samples per symbol
-    const int Nsamples = (int)std::floorf(Fs/Fsym);
+    const int Nsamples = (int)std::round(Fs/Fsym);
     const int T_block_microseconds = static_cast<int>(std::ceil(T_block * 1e6));
 
     uint8_t* tx_block = new uint8_t[block_size*2];
@@ -197,15 +197,17 @@ int main(int argc, char** argv) {
 }
 
 int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms) {
+    static const uint8_t _gray_code[4] = {0b00, 0b01, 0b11, 0b10};
+
     uint8_t I1 = (x & 0b11000000) >> 6;
     uint8_t Q1 = (x & 0b00110000) >> 4;
     uint8_t I2 = (x & 0b00001100) >> 2;
     uint8_t Q2 = (x & 0b00000011);
 
-    I1 = I1*8 + 128;
-    Q1 = Q1*8 + 128;
-    I2 = I2*8 + 128;
-    Q2 = Q2*8 + 128;
+    I1 = _gray_code[I1]*8 + 128;
+    Q1 = _gray_code[Q1]*8 + 128;
+    I2 = _gray_code[I2]*8 + 128;
+    Q2 = _gray_code[Q2]*8 + 128;
 
     syms[0].I = I1;
     syms[0].Q = Q1;
@@ -216,6 +218,7 @@ int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms) {
 }
 
 int create_4QAM_symbols(uint8_t x, IQ_Symbol* syms) {
+    // NOTE: 4QAM is already gray code by itself
     int j = 0;
     for (int i = 0; i < 8; i+=2) {
         const int shift = 7-i;
