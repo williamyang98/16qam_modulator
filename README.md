@@ -14,17 +14,18 @@ Frame consists of the following:
 - Payload length excluding crc8: uint16
 - Payload data in bytes: uint8*
 - CRC8 with polynomial 0xD5 calculated on just the payload data
+- Trellis terminator sequence of 0x00
 
-The symbol rate is 50kHz which gives 100kb/s or 12.5kB/s. 
-The ADC is being sampled at 10kHz which produces 10kB/s of raw 8bit audio data.
+The symbol rate is 87kHz which gives 348kb/s or 43.5kB/s. 
+The ADC is being sampled at 17.4kHz which produces 17.4kB/s of raw 8bit audio data.
 
-With the encoding scheme we are transmitting at 50Hz:
-1. Audio data block: 100B raw ==> 210B encoded
-2. Misc data block: 15B raw ==> 40B encoded
+With the encoding scheme we are transmitting audio frames at 174Hz:
+1. Audio data block: 100B raw ==> 212B encoded
+2. Misc data block: 13B raw ==> 38B encoded
 
-250B at 50Hz is 12.5kB/s which matches our symbol rate.
+250B at 174Hz is 43.5kB/s which matches our symbol rate.
 
-The reason why we are polling the ADC so slowly is because the ISR used for symbol transmit can only go up to 50kHz.
+The reason why we are polling the ADC so slowly is because the ISR used for symbol transmit can only go up to 87kHz.
 This results in extreme amounts of aliasing in the sampled audio. This could be improved in the future by optimising the ISR or using a faster micro.
 
 ## Transmitter circuit
@@ -51,10 +52,8 @@ Change the ImDrawIdx to unsigned int since ImPlot will exceed the vertex count l
 
 ## TODO
 - Improve the demodulator by using better techniques
-  - Improve the design of the TED and carrier PLL with better loop filters
   - Add a CIC upsampling filter to improve the timing error detector
   - Add coarse frequency correction
-- Build a proper circuit board 
 - Experiment with using the STM32F401 which is much faster than the ATmega328p
 - Improve software quality in general
   - Use SIMD instructions or a proper DSP library for improved performance
