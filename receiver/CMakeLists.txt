@@ -15,6 +15,8 @@ set(SRC_FILES
     src/constellation.cpp
     src/frame_decoder.cpp
     src/preamble_detector.cpp
+    src/qam_demodulator.cpp
+    src/audio_processor.cpp
 )
 
 add_executable(read_data 

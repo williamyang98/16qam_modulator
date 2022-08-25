@@ -7,6 +7,8 @@
 #include "carrier_dsp.h"
 #include "carrier_demodulator_spec.h"
 #include "frame_synchroniser.h"
+#include "qam_demodulator.h"
+#include "audio_processor.h"
 
 #include <io.h>
 #include <fcntl.h>
@@ -19,10 +21,77 @@
   #define LOG_MESSAGE(...) (void)0
 #endif
 
-constexpr uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
-constexpr uint16_t SCRAMBLER_CODE = 0b1000010101011001;
-constexpr uint32_t CRC32_POLY = 0x04C11DB7;
-constexpr uint32_t CRC8_POLY = 0xD5;
+class FrameHandler: public QAM_Demodulator_Callback 
+{
+public:
+    struct {
+        int total = 0;
+        int incorrect = 0;
+        int correct = 0;
+        int corrupted = 0;
+        int repaired = 0;
+        float GetPacketErrorRate() {
+            return  (float)incorrect / (float)total;
+        }
+        float GetRepairFailureRate() {
+            return (float)repaired / (float)correct;
+        }
+        void reset() {
+            total = 0;
+            incorrect = 0;
+            correct = 0;
+            corrupted = 0;
+            repaired = 0;
+        }
+    } stats;
+private:
+    const int frame_length;
+    AudioProcessor* audio;
+public: 
+    FrameHandler(AudioProcessor* _audio, const int _frame_length)
+    : frame_length(_frame_length), audio(_audio) {}
+public:
+    virtual void OnFrameResult(
+        FrameSynchroniser::Result res, 
+        FrameDecoder::Payload payload)
+    {
+        using Res = FrameSynchroniser::Result;
+        switch (res) {
+        case Res::PREAMBLE_FOUND:
+            // LOG_MESSAGE(
+            //     "Preamble: phase %d, conflict=%d, desync=%d\n", 
+            //     preamble_detector->GetPhaseIndex(), 
+            //     preamble_detector->IsPhaseConflict(), 
+            //     preamble_detector->GetDesyncBitcount());
+            break;
+        case Res::BLOCK_SIZE_OK:
+            LOG_MESSAGE("Got block size: %d\n", payload.length);
+            break;
+        case Res::BLOCK_SIZE_ERR:
+            LOG_MESSAGE("Got invalid block size: %d\n", payload.length);
+            stats.corrupted++;
+            break;
+        case Res::PAYLOAD_ERR:
+            LOG_MESSAGE("Got invalid block size: %d\n", payload.length);
+            stats.total++;
+            stats.incorrect++;
+            break;
+        case Res::PAYLOAD_OK:
+            stats.total++;
+            stats.correct++;
+            if (payload.decoded_error > 0) {
+                stats.repaired++;
+            }
+            if (payload.length == frame_length) {
+                audio->ProcessFrame(payload.buf, payload.length);
+            }
+            break;
+        case Res::NONE:
+        default:
+            break;
+        }
+    }
+};
 
 int main(int argc, char **argv) {
     FILE* fp_in = stdin;
@@ -39,8 +108,8 @@ int main(int argc, char **argv) {
 
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
-    freopen(NULL, "rb", fp_in);
-    _setmode(fileno(fp_in), _O_BINARY);
+    _setmode(_fileno(fp_in), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
 
 
     // carrier demodulator
@@ -52,13 +121,16 @@ int main(int argc, char **argv) {
     const int audio_buffer_size = (int)std::ceil(Faudio);
 
     auto x_buffer = new std::complex<uint8_t>[block_size];
-    auto x_in_buffer = new std::complex<float>[block_size];
-    auto y_buffer = new std::complex<float>[block_size];
 
-    CarrierDemodulatorSpecification spec;
+    const int audio_frame_length = 100;
+    auto audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length);
+    auto frame_handler = new FrameHandler(audio_processor, audio_frame_length);
+
+    CarrierDemodulatorSpecification carrier_demod_spec;
+    QAM_Demodulator_Specification qam_spec;
     {
         const float PI = 3.1415f;
-
+        auto& spec = carrier_demod_spec;
         spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
         spec.baseband_filter.cutoff = Fsymbol;
@@ -77,117 +149,39 @@ int main(int argc, char **argv) {
         spec.ted_pll_filter.butterworth_cutoff = 10e3;
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
+    {
+        auto& spec = qam_spec;
+        spec.block_size = block_size;
+        spec.scrambler_syncword = 0b1000010101011001;
+        spec.preamble_code = 0b11111001101011111100110101101101;
+        spec.crc8_polynomial = 0xD5;
+        spec.downsample_filter.factor = 1;
+        spec.downsample_filter.size = 0;
+    }   
+
 
     auto constellation = new SquareConstellation(4);
-
-    auto frame_decoder = new FrameDecoder(block_size);
-    auto scrambler = new AdditiveScrambler(SCRAMBLER_CODE);
-    auto crc8_calc = new CRC8_Calculator(CRC8_POLY);
-    auto vitdec = new ViterbiDecoder<encoder_decoder_type>(25);
-
-    frame_decoder->descrambler = scrambler;
-    frame_decoder->crc8_calc= crc8_calc;
-    frame_decoder->vitdec = vitdec;
-
-    auto frame_sync = new FrameSynchroniser();
-    auto preamble_detector = new PreambleDetector(PREAMBLE_CODE, 4);
-    frame_sync->constellation = constellation;
-    frame_sync->frame_decoder = frame_decoder;
-    frame_sync->preamble_detector = preamble_detector;
-
-    auto demod = new CarrierToSymbolDemodulator(spec, constellation);
     auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
-    demod->buffers = demod_buffer;
+    auto qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation, demod_buffer);
+    qam_demodulator->SetCallback(frame_handler);
 
-    uint16_t* pcm_buffer = new uint16_t[audio_buffer_size];
-    int pcm_buffer_index = 0;
-
-    auto payload_handler = 
-        [&pcm_buffer, &pcm_buffer_index, audio_buffer_size]
-        (uint8_t* x, const uint16_t N) 
-    {
-        // if not an audio block
-        if (N != 100) {
-            LOG_MESSAGE("message=%.*s\n", N, x);
-            return;
-        }
-
-        for (int i = 0; i < N; i++) {
-            const uint8_t v = x[i];
-            int16_t v0 = static_cast<int16_t>(v);
-            v0 = v0-127;
-            v0 = v0 * 16;
-            v0 = v0 + (1u << 8);
-            uint16_t v1 = (uint16_t)(v0);
-            v1 = v1 * 2;
-
-            pcm_buffer[pcm_buffer_index] = v1;
-            pcm_buffer_index++;
-
-            if (pcm_buffer_index == audio_buffer_size) {
-                pcm_buffer_index = 0;
-                fwrite(pcm_buffer, sizeof(uint16_t), audio_buffer_size, stdout);
-            }
-        }
-    };
-
-    size_t rd_block_size = 0;
     int rd_total_blocks = 0;
-    while ((rd_block_size = fread(reinterpret_cast<uint8_t*>(x_buffer), 2*sizeof(uint8_t), block_size, fp_in)) > 0) {
+    while (true) {
+        size_t rd_block_size = fread(x_buffer, sizeof(std::complex<uint8_t>), block_size, fp_in);
         if (rd_block_size != block_size) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
             break;
         }
         rd_total_blocks++; 
-
-        for (int i = 0; i < block_size; i++) {
-            const uint8_t I = x_buffer[i].real();
-            const uint8_t Q = x_buffer[i].imag();
-            x_in_buffer[i].real((float)I - 127.5f);
-            x_in_buffer[i].imag((float)Q - 127.5f);
-        }
-
-        auto total_symbols = demod->ProcessBlock(x_in_buffer, y_buffer);
-        for (int i = 0; i < total_symbols; i++) {
-            const auto IQ = y_buffer[i];
-            const auto res = frame_sync->process(IQ);
-            auto payload = frame_decoder->GetPayload();
-
-            using Res = FrameSynchroniser::Result;
-            switch (res) {
-            case Res::PREAMBLE_FOUND:
-                LOG_MESSAGE(
-                    "Preamble: phase %d, conflict=%d, desync=%d\n", 
-                    preamble_detector->GetPhaseIndex(), 
-                    preamble_detector->IsPhaseConflict(), 
-                    preamble_detector->GetDesyncBitcount());
-                break;
-            case Res::BLOCK_SIZE_OK:
-                LOG_MESSAGE("Got block size: %d\n", payload.length);
-                break;
-            case Res::BLOCK_SIZE_ERR:
-                LOG_MESSAGE("Got invalid block size: %d\n", payload.length);
-                break;
-            case Res::PAYLOAD_ERR:
-                LOG_MESSAGE("Got mismatching crc on payload\n");
-                break;
-            case Res::PAYLOAD_OK:
-                payload_handler(payload.buf, payload.length);
-                break;
-            case Res::NONE:
-            default:
-                break;
-            }
-        }
-
+        qam_demodulator->Process(x_buffer);
     }
 
     fclose(fp_in);
 
-    delete x_buffer;
-    delete x_in_buffer;
-    delete y_buffer;
     LOG_MESSAGE("Exiting\n");
+    delete x_buffer;
+    delete demod_buffer;
+    delete qam_demodulator;
 
     return 0;
 }
