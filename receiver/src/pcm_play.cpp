@@ -46,8 +46,7 @@ int main(int argc, char** argv) {
     FILE* fp = stdin;
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
-    freopen(NULL, "rb", stdin);
-    _setmode(fileno(fp), _O_BINARY);
+    _setmode(_fileno(fp), _O_BINARY);
 
     int Fsample = 87000/5;
     int block_size = 8192;

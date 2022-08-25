@@ -62,10 +62,8 @@ int main(int argc, char** argv) {
 
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
-    freopen(NULL, "wb", stdout);
-    _setmode(fileno(stdout), _O_BINARY);
-    freopen(NULL, "rb", fp);
-    _setmode(fileno(fp), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(fp), _O_BINARY);
 
     if (block_size <= 0) {
         fprintf(stderr, "Block size (%d) cannot be negative\n", block_size);
