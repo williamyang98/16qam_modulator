@@ -20,15 +20,14 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "carrier_dsp.h"
-#include "frame_synchroniser.h"
-#include "constellation.h"
+#include "qam_demodulator.h"
+#include "audio_processor.h"
 #include "filter_designer.h"
 
 #include <io.h>
 #include <fcntl.h>
 
-#define PRINT_LOG 0
+#define PRINT_LOG 1
 #if PRINT_LOG 
   #define LOG_MESSAGE(...) fprintf(stderr, ##__VA_ARGS__)
 #else
@@ -56,226 +55,145 @@ static void glfw_window_focus_callback(GLFWwindow* window, int focused)
     is_main_window_focused = focused;
 }
 
-class AudioData {
+class AudioFrameHandler: public QAM_Demodulator_Callback
+{
 public:
-    const int audio_buffer_size;
-    uint8_t* audio_buffer = NULL;
-    int16_t* pcm_buffer = NULL;
-    int total_packets = 0;
-    int incorrect_packets = 0;
-    int correct_packets = 0;
-    int corrupted_packets = 0;
-    int repaired_packets = 0;
+    struct {
+        int total = 0;
+        int incorrect = 0;
+        int correct = 0;
+        int corrupted = 0;
+        int repaired = 0;
+        float GetPacketErrorRate() {
+            return  (float)incorrect / (float)total;
+        }
+        float GetRepairFailureRate() {
+            return (float)repaired / (float)correct;
+        }
+        void reset() {
+            total = 0;
+            incorrect = 0;
+            correct = 0;
+            corrupted = 0;
+            repaired = 0;
+        }
+    } stats;
+private:
+    const int frame_length;
+    AudioProcessor* audio;
+public: 
+    AudioFrameHandler(AudioProcessor* _audio, const int _frame_length)
+    : frame_length(_frame_length), audio(_audio) {}
 public:
-    AudioData(const int _N)
-    : audio_buffer_size(_N) 
+    virtual void OnFrameResult(
+        FrameSynchroniser::Result res, 
+        FrameDecoder::Payload payload)
     {
-        audio_buffer = new uint8_t[_N];
-        pcm_buffer = new int16_t[_N];
-    }
-
-    ~AudioData() {
-        delete [] audio_buffer;
-        delete [] pcm_buffer;
+        using Res = FrameSynchroniser::Result;
+        switch (res) {
+        case Res::PREAMBLE_FOUND:
+            break;
+        case Res::BLOCK_SIZE_OK:
+            break;
+        case Res::BLOCK_SIZE_ERR:
+            LOG_MESSAGE("Got invalid block size: %d\n", payload.length);
+            stats.corrupted++;
+            break;
+        case Res::PAYLOAD_ERR:
+            stats.total++;
+            stats.incorrect++;
+            break;
+        case Res::PAYLOAD_OK:
+            stats.total++;
+            stats.correct++;
+            if (payload.decoded_error > 0) {
+                stats.repaired++;
+            }
+            if (payload.length == frame_length) {
+                audio->ProcessFrame(payload.buf, payload.length);
+            }
+            break;
+        case Res::NONE:
+        default:
+            break;
+        }
     }
 };
 
-void demodulator_thread(
-    FILE* fp, 
-    const int ds_factor, const int block_size, 
-    CarrierToSymbolDemodulatorBuffers* demod_buffer, CarrierToSymbolDemodulatorBuffers* snapshot_buffer, 
-    CarrierDemodulatorSpecification* spec, ConstellationSpecification* constellation,
-    bool* snapshot_trigger,
-    AudioData* aud_data, int16_t* audio_gain) 
+class App {
+public:
+    CarrierDemodulatorSpecification carrier_demod_spec;
+    QAM_Demodulator_Specification qam_spec;
+    ConstellationSpecification* constellation = NULL;
+    FILE* rx_fp = NULL;
+
+    AudioProcessor* audio_processor = NULL;
+    AudioFrameHandler* audio_frame_handler = NULL;
+    CarrierToSymbolDemodulatorBuffers* carrier_demod_buffer = NULL;
+    CarrierToSymbolDemodulatorBuffers* snapshot_buffer = NULL;
+    std::complex<uint8_t>* rx_buffer = NULL;
+private:
+    QAM_Demodulator* qam_demodulator = NULL;
+public:
+    struct {
+        bool rebuild = false;
+        bool snapshot = false;
+    } controls;
+    bool is_read_loop = false;
+public:
+    App() {}
+    void Run() {
+        int rd_total_blocks = 0;
+        while (true) {
+            const int ds_block_size = qam_spec.block_size * qam_spec.downsample_filter.factor;
+            size_t rd_block_size = fread(rx_buffer, sizeof(std::complex<uint8_t>), ds_block_size, rx_fp);
+            if (rd_block_size != ds_block_size) {
+                LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
+                if (is_read_loop) {
+                    fseek(rx_fp, 0, 0);
+                    continue;
+                }
+                break;
+            }
+            rd_total_blocks++; 
+
+            if (qam_demodulator != NULL) {
+                qam_demodulator->Process(rx_buffer);
+            }
+
+            if (ReadFlag(controls.snapshot)) {
+                snapshot_buffer->CopyFrom(carrier_demod_buffer);
+            }
+
+            if (ReadFlag(controls.rebuild)) {
+                BuildDemodulator();
+            }
+        }
+    }
+    void BuildDemodulator() {
+        if (qam_demodulator != NULL) {
+            delete qam_demodulator;
+        }
+        qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation, carrier_demod_buffer);
+        qam_demodulator->SetCallback(audio_frame_handler);
+    }
+private:
+    bool ReadFlag(bool& flag) {
+        const bool rv = flag;
+        flag = false;
+        return rv;
+    }
+};
+
+void demodulator_thread(App* app) 
 {
-    const int ds_block_size = block_size*ds_factor;
-
-    // quick map into buffers
-    auto IQ_mod_buffer = new std::complex<uint8_t>[ds_block_size];
-    auto IQ_demod_buffer = new std::complex<float>[block_size];
-
-    const int audio_buffer_size = aud_data->audio_buffer_size;
-
-    constexpr uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
-    constexpr uint16_t SCRAMBLER_CODE = 0b1000010101011001;
-    // constexpr uint32_t CRC32_POLY = 0x04C11DB7;
-    constexpr uint8_t CRC8_POLY = 0xD5;
-
-    auto frame_decoder = new FrameDecoder(block_size);
-    auto scrambler = new AdditiveScrambler(SCRAMBLER_CODE);
-    auto crc8_calc = new CRC8_Calculator(CRC8_POLY);
-    auto vitdec = new ViterbiDecoder<encoder_decoder_type>(25);
-
-    frame_decoder->descrambler = scrambler;
-    frame_decoder->crc8_calc= crc8_calc;
-    frame_decoder->vitdec = vitdec;
-
-    auto frame_sync = new FrameSynchroniser();
-    auto preamble_detector = new PreambleDetector(PREAMBLE_CODE, 4);
-    frame_sync->constellation = constellation;
-    frame_sync->frame_decoder = frame_decoder;
-    frame_sync->preamble_detector = preamble_detector;
-
-    auto demod = new CarrierToSymbolDemodulator(*spec, constellation);
-    demod->buffers = demod_buffer;
-
-    auto x_in_buffer = new std::complex<float>[ds_block_size];
-
-    int curr_audio_buffer_index = 0;
-
-    const int audio_payload_length = 100;
-    const int message_metadata_length = 13;
-
-    float ds_k = (spec->f_sample/2.0f)/(spec->f_sample*ds_factor/2.0f);
-    if (ds_factor == 1) {
-        ds_k = 0.9f;
-    }
-    auto ds_filter_spec = create_fir_lpf(ds_k, 50);
-    FIR_Filter<std::complex<float>> ds_filter(ds_filter_spec->b, ds_filter_spec->N);
-
-    constexpr float AC_FILTER_B[] = {1.0f, -1.0f};
-    constexpr float AC_FILTER_A[] = {1.0f, -0.999999f};
-    IIR_Filter<int16_t> audio_ac_filter(AC_FILTER_B, AC_FILTER_A, 2);
-    int16_t* ac_audio_buffer = new int16_t[audio_payload_length];
-
-    auto payload_handler = [
-        &aud_data, &curr_audio_buffer_index, 
-        &audio_gain, audio_payload_length,
-        &audio_ac_filter, &ac_audio_buffer]
-        (uint8_t* x, const uint16_t N) 
-    {
-        // if not an audio block
-        if (N != audio_payload_length) {
-            LOG_MESSAGE("message=%.*s\n", N, x);
-            return;
-        }
-
-        for (int i = 0; i < N; i++) {
-            uint16_t v = x[i];
-            v = v - 128;
-            v = v * 64;
-            ac_audio_buffer[i] = v;
-        }
-
-        audio_ac_filter.process(ac_audio_buffer, ac_audio_buffer, N);
-
-        const int16_t audio_gain_val = *audio_gain;
-
-        for (int i = 0; i < N; i++) {
-            const uint8_t v = x[i];
-            aud_data->audio_buffer[curr_audio_buffer_index] = v;
-
-            // amplify the signal
-            const int16_t v0 = ac_audio_buffer[i] * audio_gain_val;
-            aud_data->pcm_buffer[curr_audio_buffer_index] = v0;
-
-            if (curr_audio_buffer_index == (aud_data->audio_buffer_size-1)) {
-                fwrite(aud_data->pcm_buffer, sizeof(int16_t), aud_data->audio_buffer_size, stdout);
-            }
-            curr_audio_buffer_index = (curr_audio_buffer_index+1) % aud_data->audio_buffer_size;
-        }
-    };
-
-    int rd_total_blocks = 0;
-    while (true) {
-        size_t rd_block_size = fread(IQ_mod_buffer, sizeof(std::complex<uint8_t>), ds_block_size, fp);
-        if (rd_block_size != ds_block_size) {
-            LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
-            // if we are reading from a file, repeat
-            if (fp != stdin) {
-                fseek(fp, 0, 0);
-            }
-            continue;
-        }
-        rd_total_blocks++; 
-
-        for (int i = 0; i < ds_block_size; i++) {
-            const uint8_t I = IQ_mod_buffer[i].real();
-            const uint8_t Q = IQ_mod_buffer[i].imag();
-            x_in_buffer[i].real((float)I - 127.5f);
-            x_in_buffer[i].imag((float)Q - 127.5f);
-        }
-
-        if (ds_factor != 1) {
-            ds_filter.process(x_in_buffer, x_in_buffer, ds_block_size);
-            for (int i = 0; i < block_size; i++) {
-                x_in_buffer[i] = x_in_buffer[i*ds_factor];
-            }
-        }
-
-        const int total_symbols = demod->ProcessBlock(x_in_buffer, IQ_demod_buffer);
-
-        for (int i = 0; i < total_symbols; i++) {
-            const auto IQ = IQ_demod_buffer[i];
-            const auto res = frame_sync->process(IQ);
-            auto p = frame_decoder->GetPayload();
-
-            using Res = FrameSynchroniser::Result;
-            switch (res) {
-            case Res::PAYLOAD_OK:
-                {
-                    {
-                        aud_data->total_packets++;
-                        aud_data->correct_packets++;
-
-                        if (p.decoded_error > 0) {
-                            aud_data->repaired_packets++;
-                        }
-                    } 
-                    payload_handler(p.buf, p.length);
-                }
-                break;
-            case Res::PAYLOAD_ERR:
-                {
-                    {
-                        aud_data->total_packets++;
-                        aud_data->incorrect_packets++;
-                    }
-                }
-                break;
-            case Res::BLOCK_SIZE_OK:
-                // LOG_MESSAGE("block_size=%d\n", p.length);
-                break;
-            case Res::PREAMBLE_FOUND:
-                {
-                    if (preamble_detector->GetDesyncBitcount() > 0) {
-                        // LOG_MESSAGE("preamble desync: %d bits\n", s.desync_bitcount);
-                    }
-                    if (preamble_detector->IsPhaseConflict()) {
-                        // LOG_MESSAGE("phase conflict\n");
-                    }
-                }
-                break;
-            }
-        }
-
-        if (*snapshot_trigger) {
-            snapshot_buffer->CopyFrom(demod->buffers);
-            *snapshot_trigger = false;
-        }
-    }
-    
-    delete [] IQ_mod_buffer;
-    delete [] IQ_demod_buffer;
-    delete [] x_in_buffer;
-    delete frame_decoder;
-    delete scrambler;
-    delete crc8_calc;
-    delete vitdec;
-    delete frame_sync;
-    delete preamble_detector;
-    delete demod;
+    app->Run();
 }
 
 int main(int argc, char** argv)
 {
     // app startup
     FILE* fp_in = stdin;
-
-    // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
-    // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
-    freopen(NULL, "wb", stdout);
-    _setmode(fileno(stdout), _O_BINARY);
 
     if (argc > 1) {
         FILE* tmp = NULL;
@@ -289,8 +207,8 @@ int main(int argc, char** argv)
 
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
-    freopen(NULL, "rb", fp_in);
-    _setmode(fileno(fp_in), _O_BINARY);
+    _setmode(_fileno(fp_in), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
 
     // const int block_size = 4096;
     const int ds_factor = 1;
@@ -298,11 +216,22 @@ int main(int argc, char** argv)
     const float Fsample = 1e6 / (float)(ds_factor);
     const float Fsymbol = 87e3;
     const float Faudio = Fsymbol/5.0f;
+    const int audio_buffer_size = (int)(std::ceilf(Faudio));
 
-    CarrierDemodulatorSpecification spec;
+    auto app = new App();
+    app->constellation = new SquareConstellation(4);
+    app->rx_fp = fp_in;
+
+    const int audio_frame_length = 100;
+    app->audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length);
+    app->audio_frame_handler = new AudioFrameHandler(app->audio_processor, audio_frame_length);
+    app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
+    app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
+    app->rx_buffer = new std::complex<uint8_t>[block_size*ds_factor];
+
     {
         const float PI = 3.1415f;
-
+        auto& spec = app->carrier_demod_spec;
         spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
         spec.baseband_filter.cutoff = Fsymbol;
@@ -321,29 +250,29 @@ int main(int argc, char** argv)
         spec.ted_pll_filter.butterworth_cutoff = 10e3;
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
+    {
+        auto& spec = app->qam_spec;
+        spec.block_size = block_size;
+        spec.scrambler_syncword = 0b1000010101011001;
+        spec.preamble_code = 0b11111001101011111100110101101101;
+        spec.crc8_polynomial = 0xD5;
+    }
 
-    auto constellation = new SquareConstellation(4);
-    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
-    auto snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
+    const auto original_carrier_demod_spec = app->carrier_demod_spec;
+    const auto original_qam_spec = app->qam_spec;
+
+    app->BuildDemodulator();
+
     // swap between live and snapshot buffer
-    auto render_buffer = demod_buffer;
-    bool snapshot_trigger = false;
+    auto carrier_demod_buffer = app->carrier_demod_buffer;
+    auto snapshot_buffer = app->snapshot_buffer;
+    auto render_buffer = carrier_demod_buffer;
 
     // save demodulated audio
-    const int audio_buffer_size = (int)(std::ceilf(Faudio));
-
     const int16_t audio_gain_min = 0;
     const int16_t audio_gain_max = 32;
-    int16_t audio_gain = 8;
-    auto aud_data = AudioData(audio_buffer_size);
-    
-    auto demod_thread = std::thread(
-        demodulator_thread, 
-        fp_in, ds_factor,
-        block_size, demod_buffer, snapshot_buffer, 
-        &spec, constellation,
-        &snapshot_trigger,
-        &aud_data, &audio_gain);
+
+    auto demod_thread = std::thread(demodulator_thread, app);
 
     // Generate x-axis timescale for implot
     auto time_scale = new float[block_size];
@@ -488,8 +417,10 @@ int main(int argc, char** argv)
 
         ImGui::Begin("Audio Buffer");
         if (ImPlot::BeginPlot("##Audio buffer")) {
+            auto buf = app->audio_processor->GetInputBuffer();
+            const auto length = app->audio_processor->GetBufferLength();
             ImPlot::SetupAxisLimits(ImAxis_Y1, 9, 256, ImPlotCond_Once);
-            ImPlot::PlotLine("Audio", aud_data.audio_buffer, aud_data.audio_buffer_size);
+            ImPlot::PlotLine("Audio", buf, length);
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -498,8 +429,10 @@ int main(int argc, char** argv)
         if (ImPlot::BeginPlot("##Audio buffer")) {
             static double y0 = static_cast<double>(INT16_MAX);
             static double y1 = static_cast<double>(INT16_MIN);
+            auto buf = app->audio_processor->GetOutputBuffer();
+            const auto length = app->audio_processor->GetBufferLength();
             ImPlot::SetupAxisLimits(ImAxis_Y1, y1, y0, ImPlotCond_Once);
-            ImPlot::PlotLine("Audio", aud_data.pcm_buffer, aud_data.audio_buffer_size);
+            ImPlot::PlotLine("Audio", buf, length);
             ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
             ImPlot::DragLineY(1, &y1, ImVec4(1,0,0,1), 1);
             ImPlot::EndPlot();
@@ -511,41 +444,34 @@ int main(int argc, char** argv)
             const bool is_rendering_snapshot = (render_buffer == snapshot_buffer);
             if (!is_rendering_snapshot) {
                 if (ImGui::Button("Snapshot")) {
-                    snapshot_trigger = true;
+                    app->controls.snapshot = true;
                     render_buffer = snapshot_buffer;
                 }
             } else {
                 if (ImGui::Button("Resume")) {
-                    render_buffer = demod_buffer;
+                    render_buffer = carrier_demod_buffer;
                 }
             }
 
             // ImGui::SliderFloat("Symbol frequency scaler", &demod.ted_clock.fcenter_factor, 0.0f, 2.0f);
             // ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
-            int audio_gain_val = audio_gain;
-            if (ImGui::SliderInt("Audio gain", &audio_gain_val, audio_gain_min, audio_gain_max)) {
-                audio_gain = audio_gain_val;
-            }
+            auto& audio_gain = app->audio_processor->output_gain;
+            ImGui::SliderScalar("Audio gain", ImGuiDataType_S16, &audio_gain, &audio_gain_min, &audio_gain_max);
             ImGui::End();
         }
 
         if (ImGui::Begin("Statistics")) {
-            ImGui::Text("Received=%d\n", aud_data.total_packets);
-            ImGui::Text("Correct=%d\n", aud_data.correct_packets);
-            ImGui::Text("Incorrect=%d\n", aud_data.incorrect_packets);
-            ImGui::Text("Corrupted=%d\n", aud_data.corrupted_packets);
-            ImGui::Text("Repaired=%d\n", aud_data.repaired_packets);
-            const float PER = (float)aud_data.incorrect_packets / (float)aud_data.total_packets;
-            const float RER = (float)aud_data.repaired_packets / (float)aud_data.correct_packets;
-            ImGui::Text("Packet error rate=%.2f%%\n", PER*100.0f);
-            ImGui::Text("Packet repair rate=%.2f%%\n", RER*100.0f);
+            auto& stats = app->audio_frame_handler->stats;
+            ImGui::Text("Received=%d\n", stats.total);
+            ImGui::Text("Correct=%d\n", stats.correct);
+            ImGui::Text("Incorrect=%d\n", stats.incorrect);
+            ImGui::Text("Corrupted=%d\n", stats.corrupted);
+            ImGui::Text("Repaired=%d\n", stats.repaired);
+            ImGui::Text("Packet error rate=%.2f%%\n", stats.GetPacketErrorRate()*100.0f);
+            ImGui::Text("Packet repair rate=%.2f%%\n", stats.GetRepairFailureRate()*100.0f);
 
             if (ImGui::Button("Reset")) {
-                aud_data.total_packets = 0;
-                aud_data.incorrect_packets = 0;
-                aud_data.correct_packets = 0;
-                aud_data.corrupted_packets = 0;
-                aud_data.repaired_packets = 0;
+                stats.reset();
             }
             ImGui::End();
         }
@@ -610,6 +536,36 @@ int main(int argc, char** argv)
         }
         ImGui::End();
 
+        ImGui::Begin("Spec Builder");
+        {
+            auto& spec = app->carrier_demod_spec;
+            const float A = 100e3;
+            const float B = 10e3;
+            const float C = 10e3;
+            ImGui::SliderInt("Baseband FIR LPF order", &spec.baseband_filter.M, 2, 200);
+            ImGui::SliderFloat("Baseband FIR LPF cutoff", &spec.baseband_filter.cutoff, 0.0f, Fsample/(float)ds_factor * 0.5f);
+            ImGui::SliderFloat("AC Filter", &spec.ac_filter.k, 0.9999f, 1.0f);
+            ImGui::SliderFloat("AGC beta", &spec.agc.beta, 0.0f, 1.0f);
+            ImGui::SliderFloat("Carrier PLL Fcenter", &spec.carrier_pll.f_center, -B, B);
+            ImGui::SliderFloat("Carrier PLL Fgain", &spec.carrier_pll.f_gain, 0e3, A);
+            ImGui::SliderFloat("Carrier PLL Filter Cutoff", &spec.carrier_pll_filter.butterworth_cutoff, 0e3, A);
+            ImGui::SliderFloat("Carrier PLL Filter Integrator", &spec.carrier_pll_filter.integrator_gain, 0e3, C);
+            ImGui::SliderFloat("TED PLL Fgain", &spec.ted_pll.f_gain, 0e3, A);
+            ImGui::SliderFloat("TED PLL Foffset", &spec.ted_pll.f_offset, -A, A);
+            ImGui::SliderFloat("TED PLL Filter Cutoff", &spec.ted_pll_filter.butterworth_cutoff, 0e3, A);
+            ImGui::SliderFloat("TED PLL Filter Integrator", &spec.ted_pll_filter.integrator_gain, 0e3, C);
+            
+            if (ImGui::Button("Build")) {
+                app->controls.rebuild = true;
+            }
+
+            ImGui::SameLine();
+            if (ImGui::Button("Revert to default")) {
+                app->carrier_demod_spec = original_carrier_demod_spec;
+            }
+        }
+        ImGui::End();
+
         // Rendering
         ImGui::Render();
 
@@ -648,10 +604,6 @@ int main(int argc, char** argv)
     // closing down
     demod_thread.join();
     fclose(fp_in);
-
-    delete constellation;
-    delete demod_buffer;
-    delete snapshot_buffer;
 
     return 0;
 }
