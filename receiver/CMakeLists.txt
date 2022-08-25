@@ -21,8 +21,9 @@ set(SRC_FILES
 
 add_executable(read_data 
     ${SRC_FILES}
-    src/read_data.cpp)
-include_directories(read_data src/)
+    src/read_data.cpp
+    src/getopt/getopt.c)
+include_directories(read_data src/ src/getopt/)
 set_target_properties(read_data PROPERTIES CXX_STANDARD 17)
 
 add_executable(view_data 

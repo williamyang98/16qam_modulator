@@ -10,6 +10,8 @@
 #include "qam_demodulator.h"
 #include "audio_processor.h"
 
+#include "getopt/getopt.h"
+
 #include <io.h>
 #include <fcntl.h>
 
@@ -93,17 +95,58 @@ public:
     }
 };
 
-int main(int argc, char **argv) {
-    FILE* fp_in = stdin;
+void usage() {
+    fprintf(stderr, 
+        "read_data, runs 16QAM demodulation on raw IQ values\n\n"
+        "\t[-f sample rate (default: 1MHz)]\n"
+        "\t[-s symbol rate (default: 87kHz)]\n"
+        "\t[-b block size (default: 8192)]\n"
+        "\t[-i input filename (default: None)]\n"
+        "\t    If no file is provided then stdin is used\n"
+        "\t[-g audio gain (default: 8)]\n"
+        "\t[-h (show usage)]\n"
+    );
+}
 
-    if (argc > 1) {
-        FILE* tmp = NULL;
-        fopen_s(&tmp, argv[1], "r");
-        if (tmp == NULL) {
-            LOG_MESSAGE("Failed to open file for reading\n");
+int main(int argc, char **argv) {
+    float Fsample = 1e6;
+    float Fsymbol = 87e3;
+    int block_size = 8192;
+    int audio_gain = 8;
+    char* filename = NULL;
+
+    int opt; 
+    while ((opt = getopt(argc, argv, "f:s:b:i:g:h")) != -1) {
+        switch (opt) {
+        case 'f':
+            Fsample = (float)(atof(optarg));
+            break;
+        case 's':
+            Fsymbol = (float)(atof(optarg));
+            break;
+        case 'b':
+            block_size = (int)(atof(optarg));
+            break;
+        case 'i':
+            filename = optarg;
+            break;
+        case 'g':
+            audio_gain = (int)(atof(optarg));
+            break;
+        case 'h':
+        default:
+            usage();
+            return 0;
+        }
+    }
+
+    FILE* fp_in = stdin;
+    if (filename != NULL) {
+        errno_t err = fopen_s(&fp_in, filename, "r");
+        if (err != 0) {
+            fprintf(stderr, "Failed to open file: %s\n", filename);
             return 1;
-        } 
-        fp_in = tmp;
+        }
     }
 
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
@@ -111,19 +154,15 @@ int main(int argc, char **argv) {
     _setmode(_fileno(fp_in), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 
-
-    // carrier demodulator
-    const float Fsymbol = 87e3;
-    const float Fsample = 1e6;
     const float Faudio = Fsymbol/5.0f;
-
-    const int block_size = 4096;
     const int audio_buffer_size = (int)std::ceil(Faudio);
 
     auto x_buffer = new std::complex<uint8_t>[block_size];
 
     const int audio_frame_length = 100;
     auto audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length);
+    audio_processor->output_gain = audio_gain;
+
     auto frame_handler = new FrameHandler(audio_processor, audio_frame_length);
 
     CarrierDemodulatorSpecification carrier_demod_spec;
