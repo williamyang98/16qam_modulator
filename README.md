@@ -1,6 +1,6 @@
 ## Description
 A basic and dirty 16QAM modulator which uses the 74HC86 XOR to generate the symbols.
-Code for the transmitter was written for the Atmega328p in Atmel studio.
+Code for the transmitter was written for the Atmega328p in Atmel studio, and the STM32F401CCU6 using the STM32 Cube devkit.
 Receiver code is written for use with the RTLSDR dongle, using osmocom's rtl_sdr.exe project to get IQ values.
 
 ## Transmitter software
@@ -16,17 +16,24 @@ Frame consists of the following:
 - CRC8 with polynomial 0xD5 calculated on just the payload data
 - Trellis terminator sequence of 0x00
 
+We transmit in 250B encoded blocks.
+
+1. Audio data block: 100B raw ==> 212B encoded
+2. Misc data block: 13B raw ==> 38B encoded
+
+### Atmega328p
 The symbol rate is 87kHz which gives 348kb/s or 43.5kB/s. 
 The ADC is being sampled at 17.4kHz which produces 17.4kB/s of raw 8bit audio data.
 
 With the encoding scheme we are transmitting audio frames at 174Hz:
-1. Audio data block: 100B raw ==> 212B encoded
-2. Misc data block: 13B raw ==> 38B encoded
+250B at 174Hz is 43.5kB/s which matches our TX byterate.
 
-250B at 174Hz is 43.5kB/s which matches our symbol rate.
+### STM32F401
+The symbol rate is 200kHz which gives 800kb/s or 100kB/s. 
+The ADC is being sampled at 40kHz which produces 40kB/s of raw 8bit audio data.
 
-The reason why we are polling the ADC so slowly is because the ISR used for symbol transmit can only go up to 87kHz.
-This results in extreme amounts of aliasing in the sampled audio. This could be improved in the future by optimising the ISR or using a faster micro.
+With the encoding scheme we are transmitting audio frames at 400Hz:
+250B at 400Hz is 100kB/s which matches our TX byterate.
 
 ## Transmitter circuit
 Uses the 74HC86 XOR as the modulator and a discrete current feedback amplifier for amplification and buffering.
@@ -40,8 +47,14 @@ Audio is demodulated and played with VLC.
 
 ## Image gallery
 ![Circuit diagram](./docs/circuit_diagram.png)
+Circuit diagram of 16QAM transmitter.
+
 ![Receiver software](./docs/receiver_software.png)
+Image of 16QAM receiver software using RTLSDR dongle.
+
 ![Photo of transmitter circuit](./docs/transmitter_circuit_photo.jpg)
+Image of 16QAM transmitter circuit connected to Atmega328p.
+This circuit can work with the STM32F401 (even with 3.3V logic out).
 
 ## Compiling Implot/Imgui notes
 To compile Imgui correctly with Implot you need to edit your imconfig.h.
@@ -54,7 +67,7 @@ Change the ImDrawIdx to unsigned int since ImPlot will exceed the vertex count l
 - Improve the demodulator by using better techniques
   - Add a CIC upsampling filter to improve the timing error detector
   - Add coarse frequency correction
-- Experiment with using the STM32F401 which is much faster than the ATmega328p
+- <s>Experiment with using the STM32F401 which is much faster than the ATmega328p</s>
 - Improve software quality in general
   - Use SIMD instructions or a proper DSP library for improved performance
   - Do research on more performant implementations of software defined QAM demodulation
