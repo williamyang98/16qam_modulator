@@ -127,16 +127,15 @@ int CarrierToSymbolDemodulator::ProcessBlock(std::complex<float>* x, std::comple
 
     // per block filtering
     {
-        auto filter_out = buffers->x_filtered;
-        filter_baseband->process(x, filter_out, block_size);
-        filter_ac->process(filter_out, filter_out, block_size);
-        filter_agc.process(filter_out, filter_out, block_size);
+        filter_ac->process(x, buffers->x_in, block_size);
+        filter_baseband->process(buffers->x_in, buffers->x_filtered, block_size);
+        filter_agc.process(buffers->x_filtered, buffers->x_agc, block_size);
     }
 
     // carrier pll
     for (int i = 0; i < block_size; i++) {
         // get augmented value from pll mixer
-        const auto IQ_raw = buffers->x_filtered[i];
+        const auto IQ_raw = buffers->x_agc[i];
         const auto IQ_mixer_out = pll_mixer.update();
         const auto IQ_pll = IQ_raw * IQ_mixer_out;
 
@@ -230,32 +229,33 @@ CarrierToSymbolDemodulatorBuffers::CarrierToSymbolDemodulatorBuffers(const int _
 
     // calculate size of all members
     size_t s0  = 0;
-    // size_t s1 = s0 + align_memaddr(sizeof(std::complex<float>) * block_size);
-    size_t s1 = 0;
+    size_t s1 = s0 + align_memaddr(sizeof(std::complex<float>) * block_size);
     size_t s2 = s1 + align_memaddr(sizeof(std::complex<float>) * block_size);
     size_t s3 = s2 + align_memaddr(sizeof(std::complex<float>) * block_size);
     size_t s4 = s3 + align_memaddr(sizeof(std::complex<float>) * block_size);
-    size_t s5 = s4 + align_memaddr(sizeof(bool) * block_size);
+    size_t s5 = s4 + align_memaddr(sizeof(std::complex<float>) * block_size);
     size_t s6 = s5 + align_memaddr(sizeof(bool) * block_size);
     size_t s7 = s6 + align_memaddr(sizeof(bool) * block_size);
-    size_t s8 = s7 + align_memaddr(sizeof(float) * block_size);
+    size_t s8 = s7 + align_memaddr(sizeof(bool) * block_size);
     size_t s9 = s8 + align_memaddr(sizeof(float) * block_size);
+    size_t s10 = s9 + align_memaddr(sizeof(float) * block_size);
 
-    data_size = s9;
+    data_size = s10;
     data_allocate = new uint8_t[data_size];
 
     // cast with offsets to individual buffers
-    // x_in = reinterpret_cast<std::complex<float>*>(&data_allocate[s0]);
+    x_in = reinterpret_cast<std::complex<float>*>(&data_allocate[s0]);
     x_filtered = reinterpret_cast<std::complex<float>*>(&data_allocate[s1]);
-    x_pll_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s2]);
-    y_sym_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s3]);
+    x_agc = reinterpret_cast<std::complex<float>*>(&data_allocate[s2]);
+    x_pll_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s3]);
+    y_sym_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s4]);
 
-    trig_zero_crossing = reinterpret_cast<bool*>(&data_allocate[s4]);
-    trig_ted_clock = reinterpret_cast<bool*>(&data_allocate[s5]);
-    trig_integrator_dump = reinterpret_cast<bool*>(&data_allocate[s6]);
+    trig_zero_crossing = reinterpret_cast<bool*>(&data_allocate[s5]);
+    trig_ted_clock = reinterpret_cast<bool*>(&data_allocate[s6]);
+    trig_integrator_dump = reinterpret_cast<bool*>(&data_allocate[s7]);
 
-    error_pll = reinterpret_cast<float*>(&data_allocate[s7]);
-    error_ted = reinterpret_cast<float*>(&data_allocate[s8]);
+    error_pll = reinterpret_cast<float*>(&data_allocate[s8]);
+    error_ted = reinterpret_cast<float*>(&data_allocate[s9]);
 }
 
 CarrierToSymbolDemodulatorBuffers::~CarrierToSymbolDemodulatorBuffers() 

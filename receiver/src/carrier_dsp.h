@@ -16,7 +16,9 @@ public:
 public:
     const int block_size;
     // IQ samples
+    std::complex<float>* x_in;
     std::complex<float>* x_filtered;
+    std::complex<float>* x_agc;
     // output of phased locked loop
     std::complex<float>* x_pll_out;
     std::complex<float>* y_sym_out;
