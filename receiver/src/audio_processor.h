@@ -10,6 +10,7 @@ class AudioProcessor {
 public:
     int16_t output_gain = 8;
 private:
+    const float Fs;
     const int buffer_length;
     const int frame_length;
     int buffer_index = 0;
@@ -17,8 +18,9 @@ private:
     int16_t* output_buffer = NULL;
     int16_t* frame_buffer = NULL;
     IIR_Filter<int16_t>* ac_filter;
+    IIR_Filter<int16_t>* notch_filter;
 public:
-    AudioProcessor(const int _buffer_length, const int _frame_length);
+    AudioProcessor(const int _buffer_length, const int _frame_length, const float _Fs);
     ~AudioProcessor(); 
     bool ProcessFrame(const uint8_t* x, const int N);
 
