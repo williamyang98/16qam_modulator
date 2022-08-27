@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
     auto x_buffer = new std::complex<uint8_t>[block_size];
 
     const int audio_frame_length = 100;
-    auto audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length);
+    auto audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length, Faudio);
     audio_processor->output_gain = audio_gain;
 
     auto frame_handler = new FrameHandler(audio_processor, audio_frame_length);

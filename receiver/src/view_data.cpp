@@ -223,7 +223,7 @@ int main(int argc, char** argv)
     app->rx_fp = fp_in;
 
     const int audio_frame_length = 100;
-    app->audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length);
+    app->audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length, Faudio);
     app->audio_frame_handler = new AudioFrameHandler(app->audio_processor, audio_frame_length);
     app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
     app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
