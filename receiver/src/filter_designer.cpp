@@ -89,3 +89,21 @@ IIR_Filter_Res* create_iir_single_pole_lpf(const float k) {
 
     return f;
 }
+
+// Creates a second order notch filter
+// k = Fc/(Fs/2)
+IIR_Filter_Res* create_iir_notch_filter(const float k, const float r) {
+    const float w0 = PI*k;
+    const float a = 2.0f*std::cosf(w0);
+
+    auto f = new IIR_Filter_Res(3);
+    f->b[0] = 1.0f;
+    f->b[1] = -a;
+    f->b[2] = 1.0f;
+
+    f->a[0] = 1.0f;
+    f->a[1] = -a*r;
+    f->a[2] = r*r;
+
+    return f;
+}

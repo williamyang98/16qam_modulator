@@ -32,3 +32,4 @@ FIR_Filter_Res* create_fir_lpf(const float k, const int M);
 FIR_Filter_Res* create_fir_hpf(const float k, const int M);
 FIR_Filter_Res* create_fir_bpf(const float k1, const float k2, const int M);
 IIR_Filter_Res* create_iir_single_pole_lpf(const float k);
+IIR_Filter_Res* create_iir_notch_filter(const float k, const float r);
