@@ -15,7 +15,7 @@ Uses the following software/tools:
 | PB6 | Data I0 |
 | PB5 | Data Q1 |
 | PB4 | Data Q0 |
-| PA0 | Analog In |
+| PB1 | Analog In |
 | PB8 | Encoding debug signal |
 | PB9 | Transmit ISR debug signal |
 | PC13 | ADC DMA buffer debug signal |
