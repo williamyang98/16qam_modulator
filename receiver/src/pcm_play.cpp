@@ -13,6 +13,8 @@
 // Implementation of this pcm player is based off the following source:
 // https://blog.csdn.net/weixinhum/article/details/29943973
 
+HANDLE buffer_done_semaphore;
+
 void usage() {
     fprintf(stderr, 
         "pcm_play, plays 16bit pcm file\n\n"
@@ -23,8 +25,6 @@ void usage() {
 }
 
 // https://docs.microsoft.com/en-us/previous-versions/dd743869(v=vs.85)
-// When the buffer is completed, we set the length to 0
-// This value is checked in the main thread where we busy wait with a double buffer
 void CALLBACK wave_callback(
     HWAVEOUT hwo, UINT uMsg, 
     DWORD dwInstance, 
@@ -35,8 +35,8 @@ void CALLBACK wave_callback(
     // https://docs.microsoft.com/en-us/windows/win32/multimedia/wom-done?redirectedfrom=MSDN
     case WOM_DONE:
         {
-            LPWAVEHDR wave_header_ptr = dwParam1;
-            wave_header_ptr->dwBufferLength = 0;
+            // Signal to IO thread that buffer has been read so it can write to it
+            ReleaseSemaphore(buffer_done_semaphore, 1, NULL);
             break;  
         }
     }
@@ -74,8 +74,19 @@ int main(int argc, char** argv) {
 
     if (block_size <= 0) {
         fprintf(stderr, "Block size must be a positive number (%d)\n", block_size);
+        return 1;
     }
 
+    // setup semaphore for signalling between audio thread and io thread
+    // Start with an initial value of 1 so the double buffer always has at least one buffer written
+    buffer_done_semaphore = CreateSemaphore(NULL, 1, 1, NULL);
+    if (buffer_done_semaphore == NULL) {
+        fprintf(stderr, "Failed to create buffer complete sempahore\n");
+        return 1;
+    }
+    
+
+    // setup win api sound
     WAVEFORMATEX wave_format;
     wave_format.wFormatTag = WAVE_FORMAT_PCM;
     wave_format.nChannels = 1;
@@ -103,11 +114,6 @@ int main(int argc, char** argv) {
     WAVEHDR* active_buffer = &wave_header_1;
     WAVEHDR* inactive_buffer = &wave_header_2;
 
-    // We are using dwBufferLength as a flag to communicate between
-    // the main thread where we busy wait, and the callback which is
-    // called whenever a buffer is done reading 
-    active_buffer->dwBufferLength = 0;
-
     while (true) {
         while (true) {
             size_t nb_read = fread(inactive_buffer->lpData, 1, block_size, fp);
@@ -123,24 +129,20 @@ int main(int argc, char** argv) {
         inactive_buffer->dwBufferLength = block_size;
         waveOutPrepareHeader(wave_out, inactive_buffer, sizeof(WAVEHDR));  
         waveOutWrite(wave_out, inactive_buffer, sizeof(WAVEHDR));  
-    
-        while (active_buffer->dwBufferLength > 0) {
-            Sleep(1);
-        }
+
+        // Wait for active buffer to be complete and swap
+        WaitForSingleObject(buffer_done_semaphore, 1000);
 
         // Swap double buffers 
         WAVEHDR* tmp = active_buffer;
         active_buffer = inactive_buffer;
         inactive_buffer = tmp;
     }
-
-    while ((active_buffer->dwBufferLength != 0) || (inactive_buffer->dwBufferLength != 0))
-    {
-        Sleep(50);
-    }
   
     waveOutUnprepareHeader(wave_out, &wave_header_1, sizeof(WAVEHDR));
     waveOutUnprepareHeader(wave_out, &wave_header_2, sizeof(WAVEHDR));  
+    
+    CloseHandle(buffer_done_semaphore);
 
     delete [] wave_header_1.lpData;  
     delete [] wave_header_2.lpData;  
