@@ -65,7 +65,7 @@ Change the ImDrawIdx to unsigned int since ImPlot will exceed the vertex count l
 
 ## TODO
 - Improve the demodulator by using better techniques
-  - Add a CIC upsampling filter to improve the timing error detector
+  - <s>Add an upsampling block to improve the TED performance</s>
   - Add coarse frequency correction
 - <s>Experiment with using the STM32F401 which is much faster than the ATmega328p</s>
 - Improve software quality in general
