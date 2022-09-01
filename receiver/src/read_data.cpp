@@ -154,10 +154,11 @@ int main(int argc, char **argv) {
     _setmode(_fileno(fp_in), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 
+    const int ds_factor = 2;
+    const int us_factor = 4;
+
     const float Faudio = Fsymbol/5.0f;
     const int audio_buffer_size = (int)std::ceil(Faudio);
-
-    auto x_buffer = new std::complex<uint8_t>[block_size];
 
     const int audio_frame_length = 100;
     auto audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length, Faudio);
@@ -172,53 +173,57 @@ int main(int argc, char **argv) {
         auto& spec = carrier_demod_spec;
         spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
-        spec.baseband_filter.cutoff = Fsymbol;
-        spec.baseband_filter.M = 10;
+        
+        spec.downsampling_filter.M = ds_factor;
+        spec.downsampling_filter.K = 6;
+
+        spec.upsampling_filter.L = us_factor;
+        spec.upsampling_filter.K = 6;
+
         spec.ac_filter.k = 0.99999f;
-        spec.agc.beta = 0.1f;
+        spec.agc.beta = 0.2f;
         spec.agc.initial_gain = 0.1f;
         spec.carrier_pll.f_center = 0e3;
         spec.carrier_pll.f_gain = 2.5e3;
         spec.carrier_pll.phase_error_gain = 8.0f/PI;
         spec.carrier_pll_filter.butterworth_cutoff = 5e3;
         spec.carrier_pll_filter.integrator_gain = 1000.0f;
-        spec.ted_pll.f_gain = 5e3;
+        spec.ted_pll.f_gain = 30e3;
         spec.ted_pll.f_offset = 0e3;
         spec.ted_pll.phase_error_gain = 1.0f;
-        spec.ted_pll_filter.butterworth_cutoff = 10e3;
+        spec.ted_pll_filter.butterworth_cutoff = 60e3;
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
     {
         auto& spec = qam_spec;
-        spec.block_size = block_size;
+        spec.buffer_size = block_size;
         spec.scrambler_syncword = 0b1000010101011001;
         spec.preamble_code = 0b11111001101011111100110101101101;
         spec.crc8_polynomial = 0xD5;
-        spec.downsample_filter.factor = 1;
-        spec.downsample_filter.size = 0;
-    }   
+    }
 
 
     auto constellation = new SquareConstellation(4);
-    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
-    auto qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation, demod_buffer);
+    auto demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
+    auto qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation);
     qam_demodulator->SetCallback(frame_handler);
 
     int rd_total_blocks = 0;
     while (true) {
-        size_t rd_block_size = fread(x_buffer, sizeof(std::complex<uint8_t>), block_size, fp_in);
-        if (rd_block_size != block_size) {
+        auto x_buffer = demod_buffer->x_raw;
+        auto length = demod_buffer->GetInputSize();
+        size_t rd_block_size = fread(x_buffer, sizeof(std::complex<uint8_t>), length, fp_in);
+        if (rd_block_size != length) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
             break;
         }
         rd_total_blocks++; 
-        qam_demodulator->Process(x_buffer);
+        qam_demodulator->Process(demod_buffer);
     }
 
     fclose(fp_in);
 
     LOG_MESSAGE("Exiting\n");
-    delete x_buffer;
     delete demod_buffer;
     delete qam_demodulator;
 

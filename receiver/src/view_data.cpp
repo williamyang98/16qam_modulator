@@ -131,7 +131,6 @@ public:
     AudioFrameHandler* audio_frame_handler = NULL;
     CarrierToSymbolDemodulatorBuffers* carrier_demod_buffer = NULL;
     CarrierToSymbolDemodulatorBuffers* snapshot_buffer = NULL;
-    std::complex<uint8_t>* rx_buffer = NULL;
 private:
     QAM_Demodulator* qam_demodulator = NULL;
 public:
@@ -145,9 +144,10 @@ public:
     void Run() {
         int rd_total_blocks = 0;
         while (true) {
-            const int ds_block_size = qam_spec.block_size * qam_spec.downsample_filter.factor;
-            size_t rd_block_size = fread(rx_buffer, sizeof(std::complex<uint8_t>), ds_block_size, rx_fp);
-            if (rd_block_size != ds_block_size) {
+            auto rx_buffer = carrier_demod_buffer->x_raw;
+            auto rx_length = carrier_demod_buffer->GetInputSize();
+            size_t rd_block_size = fread(rx_buffer, sizeof(std::complex<uint8_t>), rx_length, rx_fp);
+            if (rd_block_size != rx_length) {
                 LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
                 if (is_read_loop) {
                     fseek(rx_fp, 0, 0);
@@ -158,7 +158,7 @@ public:
             rd_total_blocks++; 
 
             if (qam_demodulator != NULL) {
-                qam_demodulator->Process(rx_buffer);
+                qam_demodulator->Process(carrier_demod_buffer);
             }
 
             if (ReadFlag(controls.snapshot)) {
@@ -174,7 +174,7 @@ public:
         if (qam_demodulator != NULL) {
             delete qam_demodulator;
         }
-        qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation, carrier_demod_buffer);
+        qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation);
         qam_demodulator->SetCallback(audio_frame_handler);
     }
 private:
@@ -210,11 +210,12 @@ int main(int argc, char** argv)
     _setmode(_fileno(fp_in), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 
-    // const int block_size = 4096;
-    const int ds_factor = 1;
-    const int block_size = 8192 / ds_factor;
-    const float Fsample = 1e6 / (float)(ds_factor);
-    const float Fsymbol = 87e3;
+    const int ds_factor = 2;
+    const int us_factor = 4;
+
+    const int block_size = 1024;
+    const float Fsample = 1e6; 
+    const float Fsymbol = 200e3;
     const float Faudio = Fsymbol/5.0f;
     const int audio_buffer_size = (int)(std::ceilf(Faudio));
 
@@ -225,34 +226,40 @@ int main(int argc, char** argv)
     const int audio_frame_length = 100;
     app->audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length, Faudio);
     app->audio_frame_handler = new AudioFrameHandler(app->audio_processor, audio_frame_length);
-    app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
-    app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size);
-    app->rx_buffer = new std::complex<uint8_t>[block_size*ds_factor];
+    app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
+    app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
+
+    app->audio_processor->output_gain = 3;
 
     {
         const float PI = 3.1415f;
         auto& spec = app->carrier_demod_spec;
         spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
-        spec.baseband_filter.cutoff = Fsymbol;
-        spec.baseband_filter.M = 10;
+        
+        spec.downsampling_filter.M = ds_factor;
+        spec.downsampling_filter.K = 6;
+
+        spec.upsampling_filter.L = us_factor;
+        spec.upsampling_filter.K = 6;
+
         spec.ac_filter.k = 0.99999f;
-        spec.agc.beta = 0.1f;
+        spec.agc.beta = 0.2f;
         spec.agc.initial_gain = 0.1f;
         spec.carrier_pll.f_center = 0e3;
         spec.carrier_pll.f_gain = 2.5e3;
         spec.carrier_pll.phase_error_gain = 8.0f/PI;
         spec.carrier_pll_filter.butterworth_cutoff = 5e3;
         spec.carrier_pll_filter.integrator_gain = 1000.0f;
-        spec.ted_pll.f_gain = 5e3;
+        spec.ted_pll.f_gain = 30e3;
         spec.ted_pll.f_offset = 0e3;
         spec.ted_pll.phase_error_gain = 1.0f;
-        spec.ted_pll_filter.butterworth_cutoff = 10e3;
+        spec.ted_pll_filter.butterworth_cutoff = 60e3;
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
     {
         auto& spec = app->qam_spec;
-        spec.block_size = block_size;
+        spec.buffer_size = block_size;
         spec.scrambler_syncword = 0b1000010101011001;
         spec.preamble_code = 0b11111001101011111100110101101101;
         spec.crc8_polynomial = 0xD5;
@@ -273,14 +280,6 @@ int main(int argc, char** argv)
     const int16_t audio_gain_max = 32;
 
     auto demod_thread = std::thread(demodulator_thread, app);
-
-    // Generate x-axis timescale for implot
-    auto time_scale = new float[block_size];
-    const float Fs = 1e6;
-    const float Ts = 1.0f/Fs;
-    for (int i = 0; i < block_size; i++) {
-        time_scale[i] = (float)i * Ts;
-    }
 
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
@@ -381,7 +380,7 @@ int main(int argc, char** argv)
 
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     double x_min = 0.0f;
-    double x_max = (double)block_size;
+    double x_max = (double)block_size * (double)ds_factor;
     double iq_stream_y_min = -1.25f;
     double iq_stream_y_max =  1.25f;
 
@@ -484,34 +483,73 @@ int main(int argc, char** argv)
             const float marker_size = 3.0f;
             {
                 auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out);
+                auto length = render_buffer->GetTedSize();
                 ImPlot::SetNextMarkerStyle(0, marker_size);
-                ImPlot::PlotScatter("IQ demod", &buffer[0], &buffer[1], block_size, 0, 0, 2*sizeof(float));
+                ImPlot::PlotScatter("IQ demod", &buffer[0], &buffer[1], length, 0, 0, 2*sizeof(float));
             }
             {
                 auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out);
+                auto length = render_buffer->GetCarrierSize();
                 ImPlot::HideNextItem(true, ImPlotCond_Once);
                 ImPlot::SetNextMarkerStyle(0, marker_size);
-                ImPlot::PlotScatter("IQ raw", &buffer[0], &buffer[1], block_size, 0, 0, 2*sizeof(float));
+                ImPlot::PlotScatter("IQ raw", &buffer[0], &buffer[1], length, 0, 0, 2*sizeof(float));
             }
             ImPlot::EndPlot();
         }
         ImGui::End();
 
-        ImGui::Begin("IQ signals");
+        ImGui::Begin("Symbol out");
         if (ImPlot::BeginPlot("Symbol out")) {
             auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out);
+            auto length = render_buffer->GetTedSize();
+            float xscale = (float)ds_factor/(float)us_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &buffer[0], block_size, 1.0, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], block_size, 1.0, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("PLL out")) {
             auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out);
+            auto length = render_buffer->GetCarrierSize();
+            float xscale = (float)ds_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &buffer[0], block_size, 1.0, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], block_size, 1.0, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::EndPlot();
+        }
+        if (ImPlot::BeginPlot("Upsampled")) {
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_upsampled);
+            auto length = render_buffer->GetTedSize();
+            float xscale = (float)ds_factor/(float)us_factor;
+            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::EndPlot();
+        }
+        ImGui::End();
+
+        ImGui::Begin("Raw signals");
+        if (ImPlot::BeginPlot("Raw Signal")) {
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_in);
+            auto length = render_buffer->GetInputSize();
+            float xscale = 1.0f;
+            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::EndPlot();
+        }
+        if (ImPlot::BeginPlot("Downsampled signal")) {
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_downsampled);
+            auto length = render_buffer->GetCarrierSize();
+            float xscale = (float)ds_factor;
+            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -519,8 +557,10 @@ int main(int argc, char** argv)
         ImGui::Begin("Errors");
         if (ImPlot::BeginPlot("##Errors")) {
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::PlotLine("PLL error", render_buffer->error_pll, block_size);
-            ImPlot::PlotLine("TED error", render_buffer->error_ted, block_size);
+            auto ds_size = render_buffer->GetCarrierSize();
+            auto us_size = render_buffer->GetTedSize();
+            ImPlot::PlotLine("PLL error", render_buffer->error_pll, ds_size, (float)ds_factor);
+            ImPlot::PlotLine("TED error", render_buffer->error_ted, us_size, (float)ds_factor/(float)us_factor);
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -529,9 +569,12 @@ int main(int argc, char** argv)
         if (ImPlot::BeginPlot("##Triggers")) {
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLimits(ImAxis_Y1, -0.2, 1.5, ImPlotCond_Once);
-            ImPlot::PlotStems("Zero crossing", (uint8_t*)render_buffer->trig_zero_crossing, block_size);
-            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)render_buffer->trig_ted_clock, block_size);
-            ImPlot::PlotStems("Integrate+dump", (uint8_t*)render_buffer->trig_integrator_dump, block_size);
+            auto ds_size = render_buffer->GetCarrierSize();
+            auto us_size = render_buffer->GetTedSize();
+            float xscale = (float)ds_factor/(float)us_factor;
+            ImPlot::PlotStems("Zero crossing", (uint8_t*)render_buffer->trig_zero_crossing, us_size, 0.0f, xscale);
+            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)render_buffer->trig_ted_clock, us_size, 0.0f, xscale);
+            ImPlot::PlotStems("Integrate+dump", (uint8_t*)render_buffer->trig_integrator_dump, us_size, 0.0f, xscale);
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -542,8 +585,8 @@ int main(int argc, char** argv)
             const float A = 100e3;
             const float B = 10e3;
             const float C = 10e3;
-            ImGui::SliderInt("Baseband FIR LPF order", &spec.baseband_filter.M, 2, 200);
-            ImGui::SliderFloat("Baseband FIR LPF cutoff", &spec.baseband_filter.cutoff, 0.0f, Fsample/(float)ds_factor * 0.5f);
+            ImGui::SliderInt("Downsampling filter size", &spec.downsampling_filter.K, 2, 20);
+            ImGui::SliderInt("Upsampling filter size", &spec.upsampling_filter.K, 2, 20);
             ImGui::SliderFloat("AC Filter", &spec.ac_filter.k, 0.9999f, 1.0f);
             ImGui::SliderFloat("AGC beta", &spec.agc.beta, 0.0f, 1.0f);
             ImGui::SliderFloat("Carrier PLL Fcenter", &spec.carrier_pll.f_center, -B, B);
