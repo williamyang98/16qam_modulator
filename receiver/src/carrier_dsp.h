@@ -4,6 +4,7 @@
 #include <complex>
 
 #include "filters.h"
+#include "polyphase_filter.h"
 #include "carrier_dsp_blocks.h"
 #include "carrier_demodulator_spec.h"
 #include "constellation.h"
@@ -14,46 +15,49 @@ public:
     uint8_t* data_allocate; // allocate all of the data as a single block
     size_t data_size;
 public:
-    const int block_size;
+    const int src_block_size;           // Fs 
+    const int ds_block_size;            // Fs/M
+    const int us_block_size;            // L/M * Fs
     // IQ samples
-    std::complex<float>* x_in;
-    std::complex<float>* x_filtered;
-    std::complex<float>* x_agc;
+    std::complex<uint8_t>* x_raw;       // Fs
+    std::complex<float>* x_in;          // Fs
+    std::complex<float>* x_downsampled; // Fs/M
+    std::complex<float>* x_ac;          // Fs/M 
+    std::complex<float>* x_agc;         // Fs/M
     // output of phased locked loop
-    std::complex<float>* x_pll_out;
-    std::complex<float>* y_sym_out;
+    std::complex<float>* x_pll_out;     // Fs/M
+    std::complex<float>* x_upsampled;   // L/M * Fs
+    std::complex<float>* y_sym_out;     // L/M * Fs
+    std::complex<float>* y_out;         // Fsymbol
     // triggers
-    bool* trig_zero_crossing;
-    bool* trig_ted_clock;
-    bool* trig_integrator_dump;
+    bool* trig_zero_crossing;           // L/M * Fs
+    bool* trig_ted_clock;               // L/M * Fs
+    bool* trig_integrator_dump;         // L/M * Fs
     // error signals
-    float* error_pll;
-    float* error_ted;
+    float* error_pll;                   // Fs/M
+    float* error_ted;                   // L/M * Fs
 public:
-    CarrierToSymbolDemodulatorBuffers(const int _block_size);
+    CarrierToSymbolDemodulatorBuffers(const int _block_size, const int M, const int L);
     ~CarrierToSymbolDemodulatorBuffers();
     inline size_t Size() { return data_size; }
     bool CopyFrom(CarrierToSymbolDemodulatorBuffers* in);
+    int GetInputSize() const { return src_block_size; }
+    int GetCarrierSize() const { return ds_block_size; }
+    int GetTedSize() const { return us_block_size; }
 };
 
 class CarrierToSymbolDemodulator
 {
 private:
     const CarrierDemodulatorSpecification spec;
-    // processing constants
-    float Fs;
-    float Ts;
-    float Fsymbol;
-    float Tsymbol;
+private:
     int Nsymbol;
-public:
-    // buffers
-    CarrierToSymbolDemodulatorBuffers* buffers = NULL;
 private:
     // prefiltering before demodulation
-    FIR_Filter<std::complex<float>>* filter_baseband = NULL;
+    PolyphaseDownsampler<std::complex<float>>* filter_ds = NULL;
     IIR_Filter<std::complex<float>>* filter_ac = NULL;
     AGC_Filter<std::complex<float>> filter_agc;
+    PolyphaseUpsampler<std::complex<float>>* filter_us = NULL;
     // phase locked loop
     PLL_mixer pll_mixer;
     float pll_error_prev;
@@ -79,5 +83,5 @@ public:
     ~CarrierToSymbolDemodulator();
     // return the number of symbols read into the buffer
     // x must be at least block_size large
-    int ProcessBlock(std::complex<float>* x, std::complex<float>* y);
+    int ProcessBlock(CarrierToSymbolDemodulatorBuffers* buffers);
 };

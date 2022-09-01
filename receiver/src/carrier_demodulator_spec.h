@@ -1,16 +1,25 @@
 #pragma once
 
+// Diagram of our carrier to symbol demodulator
+// RX_IN --> 8bit IQ --> [8bit to float] --> Downsample --> AC Filter --> AGC --> X0
+
+// X0 --> IQ Mixer --> Upsample --> [        Sampler          ] --> Y0        
+//           ^            |            |                   ^         |
+//           |            |            v                   |         |
+//           |            |-- ZCD --> TED --> LPF --> PI --|         |
+//           |                                                       |
+//           |-- PI <-- LPF <-- Phase detector <---------------------|                    
+
 // Specification for the carrier to symbol demodulator 
 struct CarrierDemodulatorSpecification 
 {
-    float f_sample = 2e6;
-    float f_symbol = 86e3;
+    float f_sample = 1e6;
+    float f_symbol = 200e3;
 
-    // fir baseband low pass filter
     struct {
-        float cutoff = 200e3;
-        int M = 18;
-    } baseband_filter;
+        int M = 2;
+        int K = 10;
+    } downsampling_filter;
 
     // iir ac filter
     // 0 <= k <= 1.0f
@@ -36,6 +45,12 @@ struct CarrierDemodulatorSpecification
         float integrator_gain = 1000.0f;
         float butterworth_cutoff = 10e3;
     } carrier_pll_filter;
+
+    // upsampler for timing error detection
+    struct {
+        int L = 4;
+        int K = 3;
+    } upsampling_filter;
 
     // timing error detector
     struct {
