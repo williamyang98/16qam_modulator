@@ -383,6 +383,8 @@ int main(int argc, char** argv)
     double x_max = (double)block_size * (double)ds_factor;
     double iq_stream_y_min = -1.25f;
     double iq_stream_y_max =  1.25f;
+    double iq_stream_raw_y_min = -128.0f;
+    double iq_stream_raw_y_max = +128.0f;
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -537,7 +539,7 @@ int main(int argc, char** argv)
             auto length = render_buffer->GetInputSize();
             float xscale = 1.0f;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
             ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
             ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
@@ -547,7 +549,7 @@ int main(int argc, char** argv)
             auto length = render_buffer->GetCarrierSize();
             float xscale = (float)ds_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
             ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
             ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
