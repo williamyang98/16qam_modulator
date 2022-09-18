@@ -42,6 +42,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         const int NN = s.K*s.M;
         auto spec = create_fir_lpf(k, NN-1);
         filter_ds = new PolyphaseDownsampler<std::complex<float>>(spec->b, s.M, s.K);
+        delete spec;
     }
 
     // ac filter
@@ -88,6 +89,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         const int NN = s.K*s.L;
         auto spec = create_fir_lpf(k, NN-1);
         filter_us = new PolyphaseUpsampler<std::complex<float>>(spec->b, s.L, s.K);
+        delete spec;
     }
 
     // ted

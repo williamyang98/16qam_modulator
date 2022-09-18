@@ -18,6 +18,7 @@ AudioProcessor::AudioProcessor(
 
     auto spec = create_iir_notch_filter(50.0f/(Fs/2.0f), 0.9999f);
     notch_filter = new IIR_Filter<int16_t>(spec->b, spec->a, spec->N);
+    delete spec;
 
     frame_buffer = new int16_t[frame_length];
 }
