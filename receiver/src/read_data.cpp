@@ -101,37 +101,79 @@ void usage() {
         "\t[-f sample rate (default: 1MHz)]\n"
         "\t[-s symbol rate (default: 87kHz)]\n"
         "\t[-b block size (default: 8192)]\n"
+        "\t[-D downsample factor (default: 2)]\n"
+        "\t[-S upsample factor (default: 4)]\n"
+        "\t    rd_block_size = D*block_size\n"
+        "\t    us_block_size = S*block_size\n"
+        "\t    rd_block_size -> block_size -> us_block_size\n"
         "\t[-i input filename (default: None)]\n"
         "\t    If no file is provided then stdin is used\n"
-        "\t[-g audio gain (default: 8)]\n"
+        "\t[-g audio gain (default: 3)]\n"
         "\t[-h (show usage)]\n"
     );
 }
 
 int main(int argc, char **argv) {
+    int ds_factor = 2;
+    int us_factor = 4;
+
+    int block_size = 8192;
     float Fsample = 1e6;
     float Fsymbol = 87e3;
-    int block_size = 8192;
-    int audio_gain = 8;
+
     char* filename = NULL;
 
+    int audio_gain = 3;
+    // audio stream is symbol_rate / N
+    const char audio_packet_sampling_ratio = 5;
+
     int opt; 
-    while ((opt = getopt(argc, argv, "f:s:b:i:g:h")) != -1) {
+    while ((opt = getopt(argc, argv, "f:s:b:D:S:i:g:h")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = (float)(atof(optarg));
+            if (Fsample <= 0) {
+                fprintf(stderr, "Sampling rate must be positive (%.2f)\n", Fsample); 
+                return 1;
+            }
             break;
         case 's':
             Fsymbol = (float)(atof(optarg));
+            if (Fsymbol <= 0) {
+                fprintf(stderr, "Symbol rate must be positive (%.2f)\n", Fsymbol); 
+                return 1;
+            }
             break;
         case 'b':
             block_size = (int)(atof(optarg));
+            if (block_size <= 0) {
+                fprintf(stderr, "Block size must be positive (%d)\n", block_size); 
+                return 1;
+            }
+            break;
+        case 'D':
+            ds_factor = (int)(atof(optarg));
+            if (ds_factor <= 0) {
+                fprintf(stderr, "Downsampling factor must be positive (%d)\n", ds_factor); 
+                return 1;
+            }
+            break;
+        case 'S':
+            us_factor = (int)(atof(optarg));
+            if (us_factor <= 0) {
+                fprintf(stderr, "Upsampling factor must be positive (%d)\n", us_factor); 
+                return 1;
+            }
             break;
         case 'i':
             filename = optarg;
             break;
         case 'g':
             audio_gain = (int)(atof(optarg));
+            if (audio_gain < 0) {
+                fprintf(stderr, "Audio gain must be positive (%d)\n", audio_gain); 
+                return 1;
+            }
             break;
         case 'h':
         default:
@@ -154,10 +196,7 @@ int main(int argc, char **argv) {
     _setmode(_fileno(fp_in), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 
-    const int ds_factor = 2;
-    const int us_factor = 4;
-
-    const float Faudio = Fsymbol/5.0f;
+    const float Faudio = Fsymbol/(float)audio_packet_sampling_ratio;
     const int audio_buffer_size = (int)std::ceil(Faudio);
 
     const int audio_frame_length = 100;

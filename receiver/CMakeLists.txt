@@ -28,8 +28,9 @@ set_target_properties(read_data PROPERTIES CXX_STANDARD 17)
 
 add_executable(view_data 
     ${SRC_FILES}
-    src/view_data.cpp)
-include_directories(view_data src/)
+    src/view_data.cpp
+    src/getopt/getopt.c)
+include_directories(view_data src/ src/getopt/)
 set_target_properties(view_data PROPERTIES CXX_STANDARD 17)
 target_link_libraries(view_data PUBLIC imgui implot)
 

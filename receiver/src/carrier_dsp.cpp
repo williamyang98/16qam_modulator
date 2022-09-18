@@ -35,7 +35,8 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
     const float Tupsample = 1.0f/Fupsample;
     const float Tsymbol = 1.0f/Fsymbol;
 
-    // downsampling filter
+    // downsampling filter is always mandatory
+    // This is because it will implement at least one LPF with cutoff Fsymbol
     {
         auto& s = spec.downsampling_filter;
         const float k = Fsymbol/(Fsource/2.0f);
@@ -43,7 +44,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         auto spec = create_fir_lpf(k, NN-1);
         filter_ds = new PolyphaseDownsampler<std::complex<float>>(spec->b, s.M, s.K);
         delete spec;
-    }
+    } 
 
     // ac filter
     {
@@ -82,7 +83,7 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
     }
 
     // upsampling filter
-    {
+    if (spec.upsampling_filter.L > 1) {
         auto& s = spec.upsampling_filter;
         // const float k = (Fdownsample/2.0f)/(Fupsample/2.0f);
         const float k = Fsymbol/(Fupsample/2.0f);
@@ -90,6 +91,8 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         auto spec = create_fir_lpf(k, NN-1);
         filter_us = new PolyphaseUpsampler<std::complex<float>>(spec->b, s.L, s.K);
         delete spec;
+    } else {
+        filter_us = NULL;
     }
 
     // ted
@@ -123,7 +126,9 @@ CarrierToSymbolDemodulator::~CarrierToSymbolDemodulator()
 {
     delete filter_ds; 
     delete filter_ac;
-    delete filter_us;
+    if (filter_us) {
+        delete filter_us;
+    }
 
     delete pll_error_lpf;
     delete ted_error_lpf;
@@ -192,13 +197,17 @@ int CarrierToSymbolDemodulator::ProcessBlock(CarrierToSymbolDemodulatorBuffers* 
         buffers->x_pll_out[i] = IQ_pll;
         buffers->error_pll[i] = pll_mixer.phase_error;
 
-        // Upsample signal
-        filter_us->process(&buffers->x_pll_out[i], &buffers->x_upsampled[i*L], 1);
+        // Upsample signal (optional)
+        std::complex<float>* rd_buf = buffers->x_pll_out;
+        if (filter_us) {
+            filter_us->process(&buffers->x_pll_out[i], &buffers->x_upsampled[i*L], 1);
+            rd_buf = buffers->x_upsampled;
+        }
 
         for (int j = 0; j < L; j++) {
             const int us_i = i*L + j;
 
-            const auto IQ_us_pll = buffers->x_upsampled[us_i];
+            const auto IQ_us_pll = rd_buf[us_i];
             bool is_zero_crossing = false;
             {
                 is_zero_crossing = I_zcd->process(IQ_us_pll.real()) || is_zero_crossing;

@@ -24,6 +24,8 @@
 #include "audio_processor.h"
 #include "filter_designer.h"
 
+#include "getopt/getopt.h"
+
 #include <io.h>
 #include <fcntl.h>
 
@@ -190,19 +192,102 @@ void demodulator_thread(App* app)
     app->Run();
 }
 
+void usage() {
+    fprintf(stderr, 
+        "view_data, runs 16QAM demodulation on raw IQ values with GUI\n\n"
+        "\t[-f sample rate (default: 1MHz)]\n"
+        "\t[-s symbol rate (default: 200kHz)]\n"
+        "\t[-b intermediate block size (default: 1024)]\n"
+        "\t[-D downsample factor (default: 2)]\n"
+        "\t[-S upsample factor (default: 4)]\n"
+        "\t    rd_block_size = D*block_size\n"
+        "\t    us_block_size = S*block_size\n"
+        "\t    rd_block_size -> block_size -> us_block_size\n"
+        "\t[-i input filename (default: None)]\n"
+        "\t    If no file is provided then stdin is used\n"
+        "\t[-g audio gain (default: 3)]\n"
+        "\t[-h (show usage)]\n"
+    );
+}
+
 int main(int argc, char** argv)
 {
+    int ds_factor = 2;
+    int us_factor = 4;
+
+    int block_size = 1024;
+    float Fsample = 1e6; 
+    float Fsymbol = 200e3;
+
+    char* rd_filename = NULL;
+
+    int audio_gain = 3;
+    // audio stream is symbol_rate / N
+    const char audio_packet_sampling_ratio = 5;
+
+    int opt; 
+    while ((opt = getopt(argc, argv, "f:s:b:D:S:i:g:h")) != -1) {
+        switch (opt) {
+        case 'f':
+            Fsample = (float)(atof(optarg));
+            if (Fsample <= 0) {
+                fprintf(stderr, "Sampling rate must be positive (%.2f)\n", Fsample); 
+                return 1;
+            }
+            break;
+        case 's':
+            Fsymbol = (float)(atof(optarg));
+            if (Fsymbol <= 0) {
+                fprintf(stderr, "Symbol rate must be positive (%.2f)\n", Fsymbol); 
+                return 1;
+            }
+            break;
+        case 'b':
+            block_size = (int)(atof(optarg));
+            if (block_size <= 0) {
+                fprintf(stderr, "Block size must be positive (%d)\n", block_size); 
+                return 1;
+            }
+            break;
+        case 'D':
+            ds_factor = (int)(atof(optarg));
+            if (ds_factor <= 0) {
+                fprintf(stderr, "Downsampling factor must be positive (%d)\n", ds_factor); 
+                return 1;
+            }
+            break;
+        case 'S':
+            us_factor = (int)(atof(optarg));
+            if (us_factor <= 0) {
+                fprintf(stderr, "Upsampling factor must be positive (%d)\n", us_factor); 
+                return 1;
+            }
+            break;
+        case 'i':
+            rd_filename = optarg;
+            break;
+        case 'g':
+            audio_gain = (int)(atof(optarg));
+            if (audio_gain < 0) {
+                fprintf(stderr, "Audio gain must be positive (%d)\n", audio_gain); 
+                return 1;
+            }
+            break;
+        case 'h':
+        default:
+            usage();
+            return 0;
+        }
+    }
+
     // app startup
     FILE* fp_in = stdin;
-
-    if (argc > 1) {
-        FILE* tmp = NULL;
-        fopen_s(&tmp, argv[1], "r");
-        if (tmp == NULL) {
+    if (rd_filename != NULL) {
+        errno_t err = fopen_s(&fp_in, rd_filename, "r");
+        if (err != 0) {
             LOG_MESSAGE("Failed to open file for reading\n");
             return 1;
-        } 
-        fp_in = tmp;
+        }
     }
 
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
@@ -210,13 +295,7 @@ int main(int argc, char** argv)
     _setmode(_fileno(fp_in), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 
-    const int ds_factor = 2;
-    const int us_factor = 4;
-
-    const int block_size = 1024;
-    const float Fsample = 1e6; 
-    const float Fsymbol = 200e3;
-    const float Faudio = Fsymbol/5.0f;
+    const float Faudio = Fsymbol/(float)audio_packet_sampling_ratio;
     const int audio_buffer_size = (int)(std::ceilf(Faudio));
 
     auto app = new App();
@@ -229,7 +308,7 @@ int main(int argc, char** argv)
     app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
     app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
 
-    app->audio_processor->output_gain = 3;
+    app->audio_processor->output_gain = audio_gain;
 
     {
         const float PI = 3.1415f;
