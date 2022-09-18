@@ -15,7 +15,7 @@ if /I "%1" == "help" goto HELP
 goto EXIT
 
 :BUILD
-set ARGS=/p:CL_MPCOUNT=4 /m:4 /v:minimal /nologo
+set ARGS=/p:CL_MPCOUNT=%NUMBER_OF_PROCESSORS% /m:%NUMBER_OF_PROCESSORS% /v:minimal /nologo
 
 set PROJ_PATH="%3"
 if "%~3" == "" set PROJ_PATH="build\view_data.vcxproj" 
