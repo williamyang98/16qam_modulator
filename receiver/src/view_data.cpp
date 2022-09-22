@@ -141,11 +141,13 @@ public:
         bool snapshot = false;
     } controls;
     bool is_read_loop = false;
+    bool is_running = true;
 public:
     App() {}
     void Run() {
+        is_running = true;
         int rd_total_blocks = 0;
-        while (true) {
+        while (is_running) {
             auto rx_buffer = carrier_demod_buffer->x_raw;
             auto rx_length = carrier_demod_buffer->GetInputSize();
             size_t rd_block_size = fread(rx_buffer, sizeof(std::complex<uint8_t>), rx_length, rx_fp);
@@ -171,6 +173,9 @@ public:
                 BuildDemodulator();
             }
         }
+    }
+    void Stop() {
+        is_running = false;
     }
     void BuildDemodulator() {
         if (qam_demodulator != NULL) {
@@ -460,6 +465,8 @@ int main(int argc, char** argv)
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     double x_min = 0.0f;
     double x_max = (double)block_size * (double)ds_factor;
+    double audio_x_min = 0.0f;
+    double audio_x_max = (double)audio_buffer_size;
     double iq_stream_y_min = -1.25f;
     double iq_stream_y_max =  1.25f;
     double iq_stream_raw_y_min = -128.0f;
@@ -499,8 +506,13 @@ int main(int argc, char** argv)
         if (ImPlot::BeginPlot("##Audio buffer")) {
             auto buf = app->audio_processor->GetInputBuffer();
             const auto length = app->audio_processor->GetBufferLength();
+            ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
             ImPlot::SetupAxisLimits(ImAxis_Y1, 9, 256, ImPlotCond_Once);
             ImPlot::PlotLine("Audio", buf, length);
+            static double y0 = 0;
+            static double y1 = 256;
+            ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
+            ImPlot::DragLineY(1, &y1, ImVec4(1,0,0,1), 1);
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -511,6 +523,7 @@ int main(int argc, char** argv)
             static double y1 = static_cast<double>(INT16_MIN);
             auto buf = app->audio_processor->GetOutputBuffer();
             const auto length = app->audio_processor->GetBufferLength();
+            ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
             ImPlot::SetupAxisLimits(ImAxis_Y1, y1, y0, ImPlotCond_Once);
             ImPlot::PlotLine("Audio", buf, length);
             ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
@@ -726,6 +739,7 @@ int main(int argc, char** argv)
     glfwTerminate();
 
     // closing down
+    app->Stop();
     demod_thread.join();
     fclose(fp_in);
 
