@@ -37,8 +37,9 @@
 *.png
 
 # Eclipse CDT project files
-.cproject
-.project
+# These below files store the build configuration for Release and Debug
+# .cproject 
+# .project
 .settings/
 
 # Vagrant directory
