@@ -21,6 +21,8 @@ void usage() {
         "Usage:\t[-h (show usage)]\n"
         "\t[-f sample rate (default: 17400Hz)]\n"
         "\t[-b block size (default: 8192)]\n"
+        "\t[-c total channels (default: 1)]\n"
+        "\t[-e total bits per sample (default: 16)]\n"
     );
 }
 
@@ -50,9 +52,11 @@ int main(int argc, char** argv) {
 
     int Fsample = 87000/5;
     int block_size = 8192;
+    int total_channels = 1;
+    int total_bits_per_sample = 16;
     
     int opt;
-    while ((opt = getopt(argc, argv, "f:b:h")) != -1) {
+    while ((opt = getopt(argc, argv, "f:b:c:e:h")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = static_cast<int>(atof(optarg));
@@ -60,11 +64,32 @@ int main(int argc, char** argv) {
         case 'b':
             block_size = static_cast<int>(atof(optarg));
             break;
+        case 'c':
+            total_channels = static_cast<int>(atof(optarg));
+            break;
+        case 'e':
+            total_bits_per_sample = static_cast<int>(atof(optarg));
+            break;
         case 'h':
         case '?':
             usage();
             return 0;
         }
+    }
+
+    if (total_channels < 0) {
+        fprintf(stderr, "Number of channels must be a positive number (%d)\n", total_channels);
+        return 1;
+    }
+
+    if (total_bits_per_sample < 0) {
+        fprintf(stderr, "Bits per sample must be a positive number (%d)\n", total_channels);
+        return 1;
+    }
+
+    if ((total_bits_per_sample % 8) != 0) {
+        fprintf(stderr, "Bits per sample must be a multiple of 8 bits (%d)\n", total_channels);
+        return 1;
     }
 
     if (Fsample <= 0) {
@@ -84,16 +109,17 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Failed to create buffer complete sempahore\n");
         return 1;
     }
-    
+
+    const int total_bytes_per_sample = total_bits_per_sample/8;
 
     // setup win api sound
     WAVEFORMATEX wave_format;
     wave_format.wFormatTag = WAVE_FORMAT_PCM;
-    wave_format.nChannels = 1;
+    wave_format.nChannels = total_channels;
     wave_format.nSamplesPerSec = Fsample;
-    wave_format.nAvgBytesPerSec = Fsample*2;
-    wave_format.wBitsPerSample = 16;
-    wave_format.nBlockAlign = 2;
+    wave_format.nAvgBytesPerSec = Fsample*total_bytes_per_sample;
+    wave_format.wBitsPerSample = total_bits_per_sample;
+    wave_format.nBlockAlign = total_bytes_per_sample*total_channels;
     wave_format.cbSize = 0;
 
     HWAVEOUT wave_out;
