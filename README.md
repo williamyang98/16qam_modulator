@@ -3,6 +3,9 @@ A basic and dirty 16QAM modulator which uses the 74HC86 XOR to generate the symb
 Code for the transmitter was written for the Atmega328p in Atmel studio, and the STM32F401CCU6 using the STM32 Cube devkit.
 Receiver code is written for use with the RTLSDR dongle, using osmocom's rtl_sdr.exe project to get IQ values.
 
+## Video
+[![Building a 16QAM transmitter](http://img.youtube.com/vi/nNVyV39n1mE/0.jpg)](http://youtu.be/nNVyV39n1mE "Building a 16QAM transmitter")
+
 ## Transmitter software
 The encoding scheme is given as:
 - 32bit preamble using multiple Barker codes
