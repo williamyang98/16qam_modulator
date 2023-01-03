@@ -1,5 +1,4 @@
 #include "qam_demodulator.h"
-#include "filter_designer.h"
 
 QAM_Demodulator::QAM_Demodulator(
     CarrierDemodulatorSpecification _carrier_spec, 

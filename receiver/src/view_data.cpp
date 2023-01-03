@@ -20,11 +20,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "qam_demodulator.h"
-#include "audio_processor.h"
-#include "filter_designer.h"
+#include "demod/qam_demodulator.h"
+#include "demod/audio_processor.h"
 
-#include "getopt/getopt.h"
+#include "utility/getopt/getopt.h"
 
 #include <io.h>
 #include <fcntl.h>
@@ -150,7 +149,7 @@ public:
         while (is_running) {
             auto rx_buffer = carrier_demod_buffer->x_raw;
             auto rx_length = carrier_demod_buffer->GetInputSize();
-            size_t rd_block_size = fread(rx_buffer, sizeof(std::complex<uint8_t>), rx_length, rx_fp);
+            size_t rd_block_size = fread(rx_buffer.data(), sizeof(std::complex<uint8_t>), rx_length, rx_fp);
             if (rd_block_size != rx_length) {
                 LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
                 if (is_read_loop) {
@@ -231,7 +230,7 @@ int main(int argc, char** argv)
     const char audio_packet_sampling_ratio = 5;
 
     int opt; 
-    while ((opt = getopt(argc, argv, "f:s:b:D:S:i:g:h")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "f:s:b:D:S:i:g:h")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = (float)(atof(optarg));
@@ -576,13 +575,13 @@ int main(int argc, char** argv)
             ImPlot::SetupAxisLimits(ImAxis_Y1, -2, 2, ImPlotCond_Once);
             const float marker_size = 3.0f;
             {
-                auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out);
+                auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out.data());
                 auto length = render_buffer->GetTedSize();
                 ImPlot::SetNextMarkerStyle(0, marker_size);
                 ImPlot::PlotScatter("IQ demod", &buffer[0], &buffer[1], length, 0, 0, 2*sizeof(float));
             }
             {
-                auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out);
+                auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out.data());
                 auto length = render_buffer->GetCarrierSize();
                 ImPlot::HideNextItem(true, ImPlotCond_Once);
                 ImPlot::SetNextMarkerStyle(0, marker_size);
@@ -594,7 +593,7 @@ int main(int argc, char** argv)
 
         ImGui::Begin("Symbol out");
         if (ImPlot::BeginPlot("Symbol out")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out);
+            auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out.data());
             auto length = render_buffer->GetTedSize();
             float xscale = (float)ds_factor/(float)us_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
@@ -604,7 +603,7 @@ int main(int argc, char** argv)
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("PLL out")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out);
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out.data());
             auto length = render_buffer->GetCarrierSize();
             float xscale = (float)ds_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
@@ -614,7 +613,7 @@ int main(int argc, char** argv)
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("Upsampled")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_upsampled);
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_upsampled.data());
             auto length = render_buffer->GetTedSize();
             float xscale = (float)ds_factor/(float)us_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
@@ -627,7 +626,7 @@ int main(int argc, char** argv)
 
         ImGui::Begin("Raw signals");
         if (ImPlot::BeginPlot("Raw Signal")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_in);
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_in.data());
             auto length = render_buffer->GetInputSize();
             float xscale = 1.0f;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
@@ -637,7 +636,7 @@ int main(int argc, char** argv)
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("Downsampled signal")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_downsampled);
+            auto buffer = reinterpret_cast<float*>(render_buffer->x_downsampled.data());
             auto length = render_buffer->GetCarrierSize();
             float xscale = (float)ds_factor;
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
@@ -653,8 +652,8 @@ int main(int argc, char** argv)
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             auto ds_size = render_buffer->GetCarrierSize();
             auto us_size = render_buffer->GetTedSize();
-            ImPlot::PlotLine("PLL error", render_buffer->error_pll, ds_size, (float)ds_factor);
-            ImPlot::PlotLine("TED error", render_buffer->error_ted, us_size, (float)ds_factor/(float)us_factor);
+            ImPlot::PlotLine("PLL error", render_buffer->error_pll.data(), ds_size, (float)ds_factor);
+            ImPlot::PlotLine("TED error", render_buffer->error_ted.data(), us_size, (float)ds_factor/(float)us_factor);
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -666,9 +665,9 @@ int main(int argc, char** argv)
             auto ds_size = render_buffer->GetCarrierSize();
             auto us_size = render_buffer->GetTedSize();
             float xscale = (float)ds_factor/(float)us_factor;
-            ImPlot::PlotStems("Zero crossing", (uint8_t*)render_buffer->trig_zero_crossing, us_size, 0.0f, xscale);
-            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)render_buffer->trig_ted_clock, us_size, 0.0f, xscale);
-            ImPlot::PlotStems("Integrate+dump", (uint8_t*)render_buffer->trig_integrator_dump, us_size, 0.0f, xscale);
+            ImPlot::PlotStems("Zero crossing", (uint8_t*)render_buffer->trig_zero_crossing.data(), us_size, 0.0f, xscale);
+            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)render_buffer->trig_ted_clock.data(), us_size, 0.0f, xscale);
+            ImPlot::PlotStems("Integrate+dump", (uint8_t*)render_buffer->trig_integrator_dump.data(), us_size, 0.0f, xscale);
             ImPlot::EndPlot();
         }
         ImGui::End();

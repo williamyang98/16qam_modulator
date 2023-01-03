@@ -3,8 +3,13 @@
 #include <stdint.h>
 #include <complex>
 
-#include "filters.h"
-#include "polyphase_filter.h"
+#include "utility/aligned_vector.h"
+#include "utility/span.h"
+
+#include "dsp/iir_filter.h"
+#include "dsp/polyphase_filter.h"
+#include "dsp/agc.h"
+
 #include "carrier_dsp_blocks.h"
 #include "carrier_demodulator_spec.h"
 #include "constellation.h"
@@ -12,34 +17,32 @@
 class CarrierToSymbolDemodulatorBuffers
 {
 public:
-    uint8_t* data_allocate; // allocate all of the data as a single block
-    size_t data_size;
+    AlignedVector<uint8_t> data_allocate;
 public:
-    const int src_block_size;           // Fs 
-    const int ds_block_size;            // Fs/M
-    const int us_block_size;            // L/M * Fs
+    const int src_block_size;                    // Fs 
+    const int ds_block_size;                     // Fs/M
+    const int us_block_size;                     // L/M * Fs
     // IQ samples
-    std::complex<uint8_t>* x_raw;       // Fs
-    std::complex<float>* x_in;          // Fs
-    std::complex<float>* x_downsampled; // Fs/M
-    std::complex<float>* x_ac;          // Fs/M 
-    std::complex<float>* x_agc;         // Fs/M
+    tcb::span<std::complex<uint8_t>> x_raw;       // Fs
+    tcb::span<std::complex<float>> x_in;          // Fs
+    tcb::span<std::complex<float>> x_downsampled; // Fs/M
+    tcb::span<std::complex<float>> x_ac;          // Fs/M 
+    tcb::span<std::complex<float>> x_agc;         // Fs/M
     // output of phased locked loop
-    std::complex<float>* x_pll_out;     // Fs/M
-    std::complex<float>* x_upsampled;   // L/M * Fs
-    std::complex<float>* y_sym_out;     // L/M * Fs
-    std::complex<float>* y_out;         // Fsymbol
+    tcb::span<std::complex<float>> x_pll_out;     // Fs/M
+    tcb::span<std::complex<float>> x_upsampled;   // L/M * Fs
+    tcb::span<std::complex<float>> y_sym_out;     // L/M * Fs
+    tcb::span<std::complex<float>> y_out;         // Fsymbol
     // triggers
-    bool* trig_zero_crossing;           // L/M * Fs
-    bool* trig_ted_clock;               // L/M * Fs
-    bool* trig_integrator_dump;         // L/M * Fs
+    tcb::span<bool> trig_zero_crossing;           // L/M * Fs
+    tcb::span<bool> trig_ted_clock;               // L/M * Fs
+    tcb::span<bool> trig_integrator_dump;         // L/M * Fs
     // error signals
-    float* error_pll;                   // Fs/M
-    float* error_ted;                   // L/M * Fs
+    tcb::span<float> error_pll;                   // Fs/M
+    tcb::span<float> error_ted;                   // L/M * Fs
 public:
     CarrierToSymbolDemodulatorBuffers(const int _block_size, const int M, const int L);
-    ~CarrierToSymbolDemodulatorBuffers();
-    inline size_t Size() { return data_size; }
+    inline size_t Size() { return data_allocate.size(); }
     bool CopyFrom(CarrierToSymbolDemodulatorBuffers* in);
     int GetInputSize() const { return src_block_size; }
     int GetCarrierSize() const { return ds_block_size; }

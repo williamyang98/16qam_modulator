@@ -1,6 +1,6 @@
 #include "audio_processor.h"
 #include <stdio.h>
-#include "filter_designer.h"
+#include "dsp/filter_designer.h"
 
 AudioProcessor::AudioProcessor(
     const int _buffer_length, const int _frame_length,
@@ -12,13 +12,15 @@ AudioProcessor::AudioProcessor(
     input_buffer = new uint8_t[buffer_length];
     output_buffer = new int16_t[buffer_length];
 
-    const float AC_FILTER_B[] = {1.0f, -1.0f};
-    const float AC_FILTER_A[] = {1.0f, -0.999999f};
-    ac_filter = new IIR_Filter<int16_t>(AC_FILTER_B, AC_FILTER_A, 2);
+    const int N_ac = TOTAL_TAPS_IIR_AC_COUPLE;
+    ac_filter = new IIR_Filter<int16_t>(N_ac);
+    create_iir_ac_filter(ac_filter->get_b(), ac_filter->get_a(), 0.999999f);
 
-    auto spec = create_iir_notch_filter(50.0f/(Fs/2.0f), 0.9999f);
-    notch_filter = new IIR_Filter<int16_t>(spec->b, spec->a, spec->N);
-    delete spec;
+    const float k = 50.0f/(Fs/2.0f);
+    const float r = 0.9999f;
+    const int N_notch = TOTAL_TAPS_IIR_SECOND_ORDER_NOTCH_FILTER;
+    notch_filter = new IIR_Filter<int16_t>(N_notch);
+    create_iir_notch_filter(notch_filter->get_b(), notch_filter->get_a(), k, r);
 
     frame_buffer = new int16_t[frame_length];
 }

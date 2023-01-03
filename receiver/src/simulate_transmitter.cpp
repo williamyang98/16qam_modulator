@@ -12,13 +12,13 @@
 #include <chrono>
 #include <thread>
 
-#include "encoding.h"
-#include "additive_scrambler.h"
+#include "demod/encoding.h"
+#include "demod/additive_scrambler.h"
+#include "demod/crc32.h"
+#include "demod/crc8.h"
 #include "util.h"
-#include "crc32.h"
-#include "crc8.h"
 
-#include "getopt/getopt.h"
+#include "utility/getopt/getopt.h"
 
 #include <io.h>
 #include <fcntl.h>
@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
     enum ModulationType { QAM16, QPSK };
     ModulationType modulation_type = ModulationType::QAM16;
 
-    while ((opt = getopt(argc, argv, "s:b:t:m:f:DhR")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "s:b:t:m:f:DhR")) != -1) {
         switch (opt) {
         case 'D':
             is_dumping = true;

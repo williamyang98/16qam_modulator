@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "getopt/getopt.h"
+#include "utility/getopt/getopt.h"
 
 #include <Windows.h>
 #include <io.h>
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     int total_bits_per_sample = 16;
     
     int opt;
-    while ((opt = getopt(argc, argv, "f:b:c:e:h")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "f:b:c:e:h")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = static_cast<int>(atof(optarg));

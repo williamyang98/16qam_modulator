@@ -4,18 +4,18 @@
 
 #include <assert.h>
 
-#include "carrier_dsp.h"
-#include "carrier_demodulator_spec.h"
-#include "frame_synchroniser.h"
-#include "qam_demodulator.h"
-#include "audio_processor.h"
+#include "demod/carrier_dsp.h"
+#include "demod/carrier_demodulator_spec.h"
+#include "demod/frame_synchroniser.h"
+#include "demod/qam_demodulator.h"
+#include "demod/audio_processor.h"
 
-#include "getopt/getopt.h"
+#include "utility/getopt/getopt.h"
 
 #include <io.h>
 #include <fcntl.h>
 
-#define PRINT_LOG 1
+#define PRINT_LOG 0
 
 #if PRINT_LOG 
   #define LOG_MESSAGE(...) fprintf(stderr, ##__VA_ARGS__)
@@ -26,6 +26,7 @@
 class FrameHandler: public QAM_Demodulator_Callback 
 {
 public:
+    bool is_output_audio = true;
     struct {
         int total = 0;
         int incorrect = 0;
@@ -84,7 +85,7 @@ public:
             if (payload.decoded_error > 0) {
                 stats.repaired++;
             }
-            if (payload.length == frame_length) {
+            if ((payload.length == frame_length) && is_output_audio) {
                 audio->ProcessFrame(payload.buf, payload.length);
             }
             break;
@@ -109,6 +110,7 @@ void usage() {
         "\t[-i input filename (default: None)]\n"
         "\t    If no file is provided then stdin is used\n"
         "\t[-g audio gain (default: 3)]\n"
+        "\t[-A toggle audio output (default: true)]\n"
         "\t[-h (show usage)]\n"
     );
 }
@@ -125,10 +127,11 @@ int main(int argc, char **argv) {
 
     int audio_gain = 3;
     // audio stream is symbol_rate / N
-    const char audio_packet_sampling_ratio = 5;
+    const int audio_packet_sampling_ratio = 5;
+    bool is_output_audio = true;
 
     int opt; 
-    while ((opt = getopt(argc, argv, "f:s:b:D:S:i:g:h")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "f:s:b:D:S:i:g:Ah")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = (float)(atof(optarg));
@@ -175,6 +178,9 @@ int main(int argc, char **argv) {
                 return 1;
             }
             break;
+        case 'A':
+            is_output_audio = false;
+            break;
         case 'h':
         default:
             usage();
@@ -204,6 +210,7 @@ int main(int argc, char **argv) {
     audio_processor->output_gain = audio_gain;
 
     auto frame_handler = new FrameHandler(audio_processor, audio_frame_length);
+    frame_handler->is_output_audio = is_output_audio;
 
     CarrierDemodulatorSpecification carrier_demod_spec;
     QAM_Demodulator_Specification qam_spec;
@@ -251,7 +258,7 @@ int main(int argc, char **argv) {
     while (true) {
         auto x_buffer = demod_buffer->x_raw;
         auto length = demod_buffer->GetInputSize();
-        size_t rd_block_size = fread(x_buffer, sizeof(std::complex<uint8_t>), length, fp_in);
+        size_t rd_block_size = fread(x_buffer.data(), sizeof(std::complex<uint8_t>), length, fp_in);
         if (rd_block_size != length) {
             LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
             break;

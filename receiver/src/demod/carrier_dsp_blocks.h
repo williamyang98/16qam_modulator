@@ -1,7 +1,7 @@
 // Classes and functions for demodulating modulated IQ signal into symbols
 #pragma once
 
-#include "filters.h"
+#include "dsp/integrator.h"
 #include <complex>
 
 // phase locked loop mixer for carrier

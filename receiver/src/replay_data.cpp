@@ -6,7 +6,7 @@
 #include <chrono>
 #include <thread>
 
-#include "getopt/getopt.h"
+#include "utility/getopt/getopt.h"
 
 #include <io.h>
 #include <fcntl.h>
@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     char* filename = NULL;
     bool is_loop = true;
 
-    while ((opt = getopt(argc, argv, "f:b:i:lh")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "f:b:i:lh")) != -1) {
         switch (opt) {
         case 'f':
             Fs = (float)(atof(optarg));

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "filters.h"
+#include "dsp/iir_filter.h"
 
 // Accepts an audio frame of 8bit data and appends it to an audio buffer
 // When that audio buffer has reached the end, it will print to stdout the buffer as a chunk

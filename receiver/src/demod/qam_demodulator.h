@@ -3,8 +3,6 @@
 #include "carrier_dsp.h"
 #include "frame_synchroniser.h"
 #include "constellation.h"
-#include "filter.h"
-#include "polyphase_filter.h"
 
 // Set configuration options for QAM demodulator
 struct QAM_Demodulator_Specification {

@@ -4,12 +4,11 @@
 
 #include "carrier_dsp.h"
 #include "constellation.h"
-#include "filter_designer.h"
+#include "dsp/filter_designer.h"
+
+#include "utility/joint_allocate.h"
 
 constexpr float PI = (float)M_PI;
-
-// ac coupling filter
-constexpr float AC_FILTER_B[] = {1.0f, -1.0f};
 
 // N level crossing
 constexpr float N_levels[4] = {0.5f, 0.0f, -0.5f, -1.0f};
@@ -41,16 +40,16 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         auto& s = spec.downsampling_filter;
         const float k = Fsymbol/(Fsource/2.0f);
         const int NN = s.K*s.M;
-        auto spec = create_fir_lpf(k, NN-1);
-        filter_ds = new PolyphaseDownsampler<std::complex<float>>(spec->b, s.M, s.K);
-        delete spec;
+        filter_ds = new PolyphaseDownsampler<std::complex<float>>(s.M, s.K);
+        create_fir_lpf(filter_ds->get_b(), filter_ds->get_K(), k);
     } 
 
     // ac filter
     {
         auto& s = spec.ac_filter;
-        float AC_Filter_A[2] = {1.0f, -s.k};
-        filter_ac = new IIR_Filter<std::complex<float>>(AC_FILTER_B, AC_Filter_A, 2);
+        const int N = TOTAL_TAPS_IIR_AC_COUPLE;
+        filter_ac = new IIR_Filter<std::complex<float>>(N);
+        create_iir_ac_filter(filter_ac->get_b(), filter_ac->get_a(), s.k);
     }
 
     // agc
@@ -77,9 +76,9 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         pll_error_int.KTs = s.integrator_gain*Tdownsample;
 
         const float k = s.butterworth_cutoff/(Fdownsample/2.0f);
-        auto res = create_iir_single_pole_lpf(k);
-        pll_error_lpf = new IIR_Filter<float>(res->b, res->a, res->N);
-        delete res;
+        const int N = TOTAL_TAPS_IIR_SINGLE_POLE_LPF;
+        pll_error_lpf = new IIR_Filter<float>(N);
+        create_iir_single_pole_lpf(pll_error_lpf->get_b(), pll_error_lpf->get_a(), k);
     }
 
     // upsampling filter
@@ -88,9 +87,11 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         // const float k = (Fdownsample/2.0f)/(Fupsample/2.0f);
         const float k = Fsymbol/(Fupsample/2.0f);
         const int NN = s.K*s.L;
-        auto spec = create_fir_lpf(k, NN-1);
-        filter_us = new PolyphaseUpsampler<std::complex<float>>(spec->b, s.L, s.K);
-        delete spec;
+
+        auto* b = new float[NN];
+        create_fir_lpf(b, NN, k);
+        filter_us = new PolyphaseUpsampler<std::complex<float>>(b, s.L, s.K);
+        delete [] b;
     } else {
         filter_us = NULL;
     }
@@ -111,9 +112,9 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
         ted_error_int.KTs = s.integrator_gain*Tupsample;
 
         const float k = s.butterworth_cutoff/(Fupsample/2.0f);
-        auto res = create_iir_single_pole_lpf(k);
-        ted_error_lpf = new IIR_Filter<float>(res->b, res->a, res->N);
-        delete res;
+        const int N = TOTAL_TAPS_IIR_SINGLE_POLE_LPF;
+        ted_error_lpf = new IIR_Filter<float>(N);
+        create_iir_single_pole_lpf(ted_error_lpf->get_b(), ted_error_lpf->get_a(), k);
     }
 
     I_zcd = new N_Level_Crossing_Detector(N_levels, total_levels);
@@ -163,9 +164,9 @@ int CarrierToSymbolDemodulator::ProcessBlock(CarrierToSymbolDemodulatorBuffers* 
 
     // per block filtering
     {
-        filter_ds->process(buffers->x_in, buffers->x_downsampled, ds_size);
-        filter_ac->process(buffers->x_downsampled, buffers->x_ac, ds_size);
-        filter_agc.process(buffers->x_ac, buffers->x_agc, ds_size);
+        filter_ds->process(buffers->x_in.data(), buffers->x_downsampled.data(), ds_size);
+        filter_ac->process(buffers->x_downsampled.data(), buffers->x_ac.data(), ds_size);
+        filter_agc.process(buffers->x_ac.data(), buffers->x_agc.data(), ds_size);
     }
 
     // Our multirate processing loop
@@ -198,10 +199,10 @@ int CarrierToSymbolDemodulator::ProcessBlock(CarrierToSymbolDemodulatorBuffers* 
         buffers->error_pll[i] = pll_mixer.phase_error;
 
         // Upsample signal (optional)
-        std::complex<float>* rd_buf = buffers->x_pll_out;
+        std::complex<float>* rd_buf = buffers->x_pll_out.data();
         if (filter_us) {
             filter_us->process(&buffers->x_pll_out[i], &buffers->x_upsampled[i*L], 1);
-            rd_buf = buffers->x_upsampled;
+            rd_buf = buffers->x_upsampled.data();
         }
 
         for (int j = 0; j < L; j++) {
@@ -265,66 +266,28 @@ CarrierToSymbolDemodulatorBuffers::CarrierToSymbolDemodulatorBuffers(
   src_block_size(_block_size*M), 
   us_block_size(_block_size*L)
 {
-    static auto align_memaddr = [](size_t addr){
-        const size_t align_size = 8;
-        size_t offset = addr % align_size;
-        return addr - offset + (size_t)align_size;
-    };
-
-    // calculate size of all members
-    const size_t s0  = 0;
-
-    const size_t s1 = s0 + align_memaddr(sizeof(std::complex<uint8_t>) * src_block_size);
-    const size_t s2 = s1 + align_memaddr(sizeof(std::complex<float>) * src_block_size);
-
-    const size_t s3 = s2 + align_memaddr(sizeof(std::complex<float>) * ds_block_size);
-    const size_t s4 = s3 + align_memaddr(sizeof(std::complex<float>) * ds_block_size);
-    const size_t s5 = s4 + align_memaddr(sizeof(std::complex<float>) * ds_block_size);
-    const size_t s6 = s5 + align_memaddr(sizeof(std::complex<float>) * ds_block_size);
-
-    const size_t s7 = s6 + align_memaddr(sizeof(std::complex<float>) * us_block_size);
-    const size_t s8 = s7 + align_memaddr(sizeof(std::complex<float>) * us_block_size);
-
-    const size_t s9 = s8 + align_memaddr(sizeof(bool) * us_block_size);
-    const size_t s10 = s9 + align_memaddr(sizeof(bool) * us_block_size);
-    const size_t s11 = s10 + align_memaddr(sizeof(bool) * us_block_size);
-
-    const size_t s12 = s11 + align_memaddr(sizeof(float) * ds_block_size);
-    const size_t s13 = s12 + align_memaddr(sizeof(float) * us_block_size);
-
-    const size_t s14 = s13 + align_memaddr(sizeof(std::complex<float>) * us_block_size);
-
-    data_size = s14;
-    data_allocate = new uint8_t[data_size];
-
-    // cast with offsets to individual buffers
-    x_raw = reinterpret_cast<std::complex<uint8_t>*>(&data_allocate[s0]);
-    x_in = reinterpret_cast<std::complex<float>*>(&data_allocate[s1]);
-
-    x_downsampled = reinterpret_cast<std::complex<float>*>(&data_allocate[s2]);
-    x_ac = reinterpret_cast<std::complex<float>*>(&data_allocate[s3]);
-    x_agc = reinterpret_cast<std::complex<float>*>(&data_allocate[s4]);
-    x_pll_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s5]);
-
-    x_upsampled = reinterpret_cast<std::complex<float>*>(&data_allocate[s6]);
-    y_sym_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s7]);
-
-    trig_zero_crossing = reinterpret_cast<bool*>(&data_allocate[s8]);
-    trig_ted_clock = reinterpret_cast<bool*>(&data_allocate[s9]);
-    trig_integrator_dump = reinterpret_cast<bool*>(&data_allocate[s10]);
-
-    error_pll = reinterpret_cast<float*>(&data_allocate[s11]);
-    error_ted = reinterpret_cast<float*>(&data_allocate[s12]);
-
-    y_out = reinterpret_cast<std::complex<float>*>(&data_allocate[s13]);
+    constexpr size_t SIMD_ALIGN = 32;
+    data_allocate = AllocateJoint(
+        x_raw,          BufferParameters(src_block_size, SIMD_ALIGN),
+        x_in,           BufferParameters(src_block_size, SIMD_ALIGN),
+        // Downsampled
+        x_downsampled,  BufferParameters(ds_block_size, SIMD_ALIGN),
+        x_ac,           BufferParameters(ds_block_size, SIMD_ALIGN),
+        x_agc,          BufferParameters(ds_block_size, SIMD_ALIGN),
+        x_pll_out,      BufferParameters(ds_block_size, SIMD_ALIGN),
+        // Upsampled
+        x_upsampled,    BufferParameters(us_block_size, SIMD_ALIGN),
+        y_sym_out,      BufferParameters(us_block_size, SIMD_ALIGN),
+        trig_zero_crossing, BufferParameters(us_block_size, SIMD_ALIGN),
+        trig_ted_clock, BufferParameters(us_block_size, SIMD_ALIGN),
+        trig_integrator_dump, BufferParameters(us_block_size, SIMD_ALIGN),
+        // Errors
+        error_pll,      BufferParameters(ds_block_size, SIMD_ALIGN),
+        error_ted,      BufferParameters(us_block_size, SIMD_ALIGN),
+        // Output
+        y_out,          BufferParameters(us_block_size, SIMD_ALIGN)
+    );
 }
-
-CarrierToSymbolDemodulatorBuffers::~CarrierToSymbolDemodulatorBuffers() 
-{
-    delete [] data_allocate;
-    
-}
-
 
 bool CarrierToSymbolDemodulatorBuffers::CopyFrom(CarrierToSymbolDemodulatorBuffers* in)
 {
@@ -333,6 +296,6 @@ bool CarrierToSymbolDemodulatorBuffers::CopyFrom(CarrierToSymbolDemodulatorBuffe
     } 
 
     const size_t total_size = Size();
-    memcpy_s(data_allocate, total_size, in->data_allocate, total_size);
+    memcpy_s(data_allocate.data(), total_size, in->data_allocate.data(), total_size);
     return true;
 }
