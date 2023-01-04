@@ -1,4 +1,5 @@
 #include "frame_decoder.h"
+#include <assert.h>
 
 FrameDecoder::FrameDecoder(const int _buffer_size)
 : buffer_size(_buffer_size) 
@@ -46,12 +47,13 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_block_size(const uint8_t
         return ProcessResult::NONE;
     }
 
-    decoded_bytes += vitdec->process(
-        &encoded_buffer[0], 
-        nb_bytes_for_block_size, 
-        &decoded_buffer[0], 
-        buffer_size-decoded_bytes,
-        false);
+    const int nb_decoded_bytes = nb_bytes_for_block_size/CODE_RATE;
+    assert(nb_bytes_for_block_size <= buffer_size);
+    assert(nb_decoded_bytes <= buffer_size );
+
+    vitdec->Update({ &encoded_buffer[0], (size_t)nb_bytes_for_block_size });
+    vitdec->GetTraceback({ &decoded_buffer[0], (size_t)nb_decoded_bytes });
+    decoded_bytes += nb_decoded_bytes;
 
     const uint16_t rx_block_size = *reinterpret_cast<uint16_t*>(&decoded_buffer[0]);
     payload.length = rx_block_size;
@@ -60,7 +62,7 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_block_size(const uint8_t
 
     // our receiving block size must fit into the buffer with length and crc
     const int min_block_size = nb_bytes_for_block_size/2 - 3;
-    const int max_block_size = buffer_size/2 - frame_overhead;
+    const int max_block_size = buffer_size/CODE_RATE - frame_overhead;
 
     if ((rx_block_size > max_block_size) || (rx_block_size < min_block_size)) {
         payload.buf = NULL; 
@@ -69,7 +71,7 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_block_size(const uint8_t
     } else {
         payload.buf = NULL;
         decoded_block_size = rx_block_size;
-        encoded_block_size = 2*(decoded_block_size+frame_overhead);
+        encoded_block_size = CODE_RATE*(decoded_block_size+frame_overhead);
         state = State::WAIT_PAYLOAD; 
         return ProcessResult::BLOCK_SIZE_OK;
     }
@@ -88,12 +90,17 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_payload(const uint8_t x,
     // Once we have received the known number of encoded bytes, decode the rest of the frame
     // We flush the viterbi decoder to get all of the predicted bits
     // NOTE: We have a known byte of 0x00 as the Trellis terminator
-    decoded_bytes += vitdec->process(
-        &encoded_buffer[nb_bytes_for_block_size], 
-        encoded_block_size-nb_bytes_for_block_size, 
-        &decoded_buffer[decoded_bytes], 
-        buffer_size-decoded_bytes,
-        true);
+    const int nb_encoded_bytes = encoded_block_size-nb_bytes_for_block_size;
+    const int nb_decoded_bytes = nb_encoded_bytes/CODE_RATE;
+
+    assert(nb_encoded_bytes <= buffer_size);
+    assert((encoded_block_size/CODE_RATE) <= buffer_size);
+
+    vitdec->Update({ &encoded_buffer[nb_bytes_for_block_size], (size_t)nb_encoded_bytes });
+    vitdec->GetTraceback({ &decoded_buffer[0], (size_t)(encoded_block_size/CODE_RATE) });
+    decoded_bytes += nb_decoded_bytes;
+
+    assert(decoded_bytes <= buffer_size);
 
     // packet structure
     // 0:1 -> uint16_t length
@@ -109,7 +116,7 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_payload(const uint8_t x,
 
     const uint8_t crc8_true = decoded_buffer[decoded_bytes-(crc8_length+trellis_terminator_length)];
     const uint8_t crc8_pred = crc8_calc->process(payload_buf, decoded_block_size);
-    const auto dist_err = vitdec->get_curr_error();
+    const auto dist_err = (int)vitdec->GetPathError();
     const bool crc8_mismatch = (crc8_true != crc8_pred);
 
     state = State::IDLE;
@@ -143,6 +150,8 @@ void FrameDecoder::process_decoder_bits(const uint8_t x, const int nb_bits) {
         encoded_buffer[encoded_bytes] = descrambler->process(descramble_buffer[encoded_bytes]);
         encoded_bytes += 1;
     }
+
+    assert(encoded_bytes <= buffer_size);
 }
 
 void FrameDecoder::reset() {
@@ -159,5 +168,5 @@ void FrameDecoder::reset() {
     encoded_block_size = 0;
 
     descrambler->reset();
-    vitdec->reset();
+    vitdec->Reset();
 }

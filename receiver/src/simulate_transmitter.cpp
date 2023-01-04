@@ -12,7 +12,7 @@
 #include <chrono>
 #include <thread>
 
-#include "demod/encoding.h"
+#include "demod/convolutional_encoder.h"
 #include "demod/additive_scrambler.h"
 #include "demod/crc32.h"
 #include "demod/crc8.h"
@@ -30,12 +30,13 @@ struct IQ_Symbol {
 
 // pad preamble bits to be byte aligned
 // 2x13-barker codes and 1x2-code and 1x4-code
+constexpr uint8_t CONV_POLY[CODE_RATE] = { 0b111, 0b101 };
 constexpr uint32_t PREAMBLE_CODE = 0b11111001101011111100110101101101;
 constexpr uint16_t SCRAMBLER_CODE = 0b1000010101011001;
 constexpr uint32_t CRC32_POLY = 0x04C11DB7;
 constexpr uint8_t CRC8_POLY = 0xD5;
 
-auto enc = ConvolutionalEncoder<encoder_decoder_type>();
+auto enc = ConvolutionalEncoder(CONV_POLY);
 auto scrambler = AdditiveScrambler(SCRAMBLER_CODE);
 auto crc32_calc = CRC32_Calculator(CRC32_POLY);
 auto crc8_calc = CRC8_Calculator(CRC8_POLY);
@@ -249,8 +250,6 @@ int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
 
     // T = 4 + 2*(2+N+1+1)
     // T = 2N + 12
-
-    assert(sizeof(encoder_decoder_type) == G_SYM_SIZE);
 
     int offset = 0;
     offset += push_big_endian_byte(&y[offset], PREAMBLE_CODE);

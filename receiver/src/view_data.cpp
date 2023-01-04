@@ -79,6 +79,8 @@ public:
             repaired = 0;
         }
     } stats;
+    bool is_output_audio = true;
+    bool is_output_data = false;
 private:
     const int frame_length;
     AudioProcessor* audio;
@@ -111,7 +113,15 @@ public:
                 stats.repaired++;
             }
             if (payload.length == frame_length) {
-                audio->ProcessFrame(payload.buf, payload.length);
+                if (is_output_audio) {
+                    audio->ProcessFrame(payload.buf, payload.length);
+                }
+            } else {
+                if (is_output_data) {
+                    LOG_MESSAGE("Received data[%d]=%.*s\n", 
+                        (int)payload.length, 
+                        (int)payload.length, reinterpret_cast<char*>(payload.buf));
+                }
             }
             break;
         case Res::NONE:
@@ -210,6 +220,7 @@ void usage() {
         "\t[-i input filename (default: None)]\n"
         "\t    If no file is provided then stdin is used\n"
         "\t[-g audio gain (default: 3)]\n"
+        "\t[-A disable audio output (default: true)]\n"
         "\t[-h (show usage)]\n"
     );
 }
@@ -228,9 +239,10 @@ int main(int argc, char** argv)
     int audio_gain = 3;
     // audio stream is symbol_rate / N
     const char audio_packet_sampling_ratio = 5;
+    bool is_output_audio = true;
 
     int opt; 
-    while ((opt = getopt_custom(argc, argv, "f:s:b:D:S:i:g:h")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "f:s:b:D:S:i:g:Ah")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = (float)(atof(optarg));
@@ -277,6 +289,9 @@ int main(int argc, char** argv)
                 return 1;
             }
             break;
+        case 'A':
+            is_output_audio = false;
+            break;
         case 'h':
         default:
             usage();
@@ -311,6 +326,8 @@ int main(int argc, char** argv)
     app->audio_frame_handler = new AudioFrameHandler(app->audio_processor, audio_frame_length);
     app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
     app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
+
+    app->audio_frame_handler->is_output_audio = is_output_audio;
 
     app->audio_processor->output_gain = audio_gain;
 
@@ -549,6 +566,8 @@ int main(int argc, char** argv)
             // ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
             auto& audio_gain = app->audio_processor->output_gain;
             ImGui::SliderScalar("Audio gain", ImGuiDataType_S16, &audio_gain, &audio_gain_min, &audio_gain_max);
+            ImGui::Checkbox("Output Audio", &app->audio_frame_handler->is_output_audio);
+            ImGui::Checkbox("Output Data", &app->audio_frame_handler->is_output_data);
             ImGui::End();
         }
 

@@ -4,7 +4,7 @@
 
 #include "crc8.h"
 #include "additive_scrambler.h"
-#include "encoding.h"
+#include "viterbi_decoder.h"
 
 // Decodes a encoded payload 
 // payload --> FEC --> Scrambler --> TX
@@ -38,7 +38,7 @@ public:
 public:
     // NOTE: Must pass this in by reference before using frame decoder
     AdditiveScrambler* descrambler = NULL;
-    ViterbiDecoder<encoder_decoder_type>* vitdec = NULL;
+    ViterbiDecoder* vitdec = NULL;
     CRC8_Calculator* crc8_calc = NULL;
 private:
     // internal buffers for decoding

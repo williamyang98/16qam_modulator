@@ -7,9 +7,8 @@ QAM_Demodulator::QAM_Demodulator(
 : carrier_spec(_carrier_spec), qam_spec(_qam_spec),
   constellation(_constellation)
 {
-    // We have a trackback length of 25 since that is an integer of 8 plus 1
-    // N = 8k + 1
-    vitdec = new ViterbiDecoder<encoder_decoder_type>(25);
+    const uint8_t POLY[CODE_RATE] = { 0b111, 0b101 };
+    vitdec = new ViterbiDecoder(POLY, _qam_spec.buffer_size*8);
     scrambler = new AdditiveScrambler(qam_spec.scrambler_syncword);
     crc8_calc = new CRC8_Calculator(qam_spec.crc8_polynomial);
 

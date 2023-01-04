@@ -32,7 +32,11 @@ add_library(demod_lib STATIC
     ${DEMOD_DIR}/frame_decoder.cpp
     ${DEMOD_DIR}/preamble_detector.cpp
     ${DEMOD_DIR}/qam_demodulator.cpp
-    ${DEMOD_DIR}/audio_processor.cpp)
+    ${DEMOD_DIR}/audio_processor.cpp
+    ${DEMOD_DIR}/convolutional_encoder.cpp
+    ${DEMOD_DIR}/viterbi_decoder.cpp
+    ${DEMOD_DIR}/phil_karn_viterbi_decoder.cpp
+)
 target_link_libraries(demod_lib PRIVATE dsp_lib)
 target_include_directories(demod_lib PRIVATE ${DEMOD_DIR} ${SRC_DIR})
 target_compile_features(demod_lib PRIVATE cxx_std_17)

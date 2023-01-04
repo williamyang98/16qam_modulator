@@ -5,6 +5,7 @@
 // Preamble filter interface
 class PreambleFilter {
 public:
+    virtual ~PreambleFilter() {};
     virtual void reset() = 0;
     virtual bool process(const uint8_t sym, const int nb_bits) = 0;
     virtual int get_length() = 0;
@@ -21,6 +22,7 @@ public:
     : preamble(_preamble) {
         reg = 0;
     }
+    virtual ~VariablePreambleFilter() {};
     virtual void reset() {
         reg = 0;
     }

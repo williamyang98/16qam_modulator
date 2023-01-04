@@ -39,7 +39,6 @@ CarrierToSymbolDemodulator::CarrierToSymbolDemodulator(
     {
         auto& s = spec.downsampling_filter;
         const float k = Fsymbol/(Fsource/2.0f);
-        const int NN = s.K*s.M;
         filter_ds = new PolyphaseDownsampler<std::complex<float>>(s.M, s.K);
         create_fir_lpf(filter_ds->get_b(), filter_ds->get_K(), k);
     } 

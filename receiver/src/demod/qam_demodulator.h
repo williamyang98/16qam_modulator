@@ -27,12 +27,10 @@ private:
     FrameDecoder* frame_decoder;
     AdditiveScrambler* scrambler;
     CRC8_Calculator* crc8_calc;
-    ViterbiDecoder<encoder_decoder_type>* vitdec;
+    ViterbiDecoder* vitdec;
 
     FrameSynchroniser* frame_synchroniser;
     CarrierToSymbolDemodulator* carrier_demodulator;
-
-    CarrierToSymbolDemodulatorBuffers* carrier_demod_buffer;
 private:
     const CarrierDemodulatorSpecification carrier_spec; 
     const QAM_Demodulator_Specification qam_spec;
