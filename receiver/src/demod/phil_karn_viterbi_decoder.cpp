@@ -161,12 +161,14 @@ void init_viterbi(vitdec_t* vp, int starting_state) {
 
     // Only the starting state has 0 error
     vp->old_metrics->buf[starting_state & (NUMSTATES-1)] = INITIAL_START_ERROR;
-    vp->curr_decoded_bit = 0;
+
+    // Reset decision array
     {
-        const int N = vp->maximum_decoded_bits;
+        const int N = vp->curr_decoded_bit;
         decision_t* d = vp->decisions;
         memset(d, 0, N*sizeof(decision_t));
     }
+    vp->curr_decoded_bit = 0;
 }
 
 /* Create a new instance of a Viterbi decoder */
@@ -187,7 +189,8 @@ vitdec_t* create_viterbi(
     }
 
     vp->maximum_decoded_bits = nb_max_input_bits;
-    vp->curr_decoded_bit = 0;
+    // NOTE: We set this to max so when we "init", the entire vp->decisions array is reset
+    vp->curr_decoded_bit = vp->maximum_decoded_bits;
     for (int state = 0; state < NUMSTATES/2; state++) {
         for (int i = 0; i < CODE_RATE; i++) {
             const uint8_t v = parity((state << 1) & polys[i]);
