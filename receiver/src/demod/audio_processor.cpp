@@ -11,18 +11,21 @@ AudioProcessor::AudioProcessor(
 {
     input_buffer = new uint8_t[buffer_length];
     output_buffer = new int16_t[buffer_length];
-
-    const int N_ac = TOTAL_TAPS_IIR_AC_COUPLE;
-    ac_filter = new IIR_Filter<int16_t>(N_ac);
-    create_iir_ac_filter(ac_filter->get_b(), ac_filter->get_a(), 0.999999f);
-
-    const float k = 50.0f/(Fs/2.0f);
-    const float r = 0.9999f;
-    const int N_notch = TOTAL_TAPS_IIR_SECOND_ORDER_NOTCH_FILTER;
-    notch_filter = new IIR_Filter<int16_t>(N_notch);
-    create_iir_notch_filter(notch_filter->get_b(), notch_filter->get_a(), k, r);
-
     frame_buffer = new int16_t[frame_length];
+
+    {
+        const int N_ac = TOTAL_TAPS_IIR_AC_COUPLE;
+        ac_filter = new IIR_Filter<int16_t>(N_ac);
+        create_iir_ac_filter(ac_filter->get_b(), ac_filter->get_a(), 0.9999f);
+    }
+
+    {
+        const float k = 50.0f/(Fs/2.0f);
+        const float r = 0.9999f;
+        const int N_notch = TOTAL_TAPS_IIR_SECOND_ORDER_NOTCH_FILTER;
+        notch_filter = new IIR_Filter<int16_t>(N_notch);
+        create_iir_notch_filter(notch_filter->get_b(), notch_filter->get_a(), k, r);
+    }
 }
 
 AudioProcessor::~AudioProcessor() {

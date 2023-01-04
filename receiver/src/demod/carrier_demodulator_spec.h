@@ -24,7 +24,7 @@ struct CarrierDemodulatorSpecification
     // iir ac filter
     // 0 <= k <= 1.0f
     struct {
-        float k = 0.99999f;
+        float k = 0.9999f;
     } ac_filter;
 
     // automatic gain control

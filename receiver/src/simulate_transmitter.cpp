@@ -16,7 +16,6 @@
 #include "demod/additive_scrambler.h"
 #include "demod/crc32.h"
 #include "demod/crc8.h"
-#include "util.h"
 
 #include "utility/getopt/getopt.h"
 
@@ -27,6 +26,16 @@ struct IQ_Symbol {
     uint8_t I;
     uint8_t Q;
 };
+
+template <typename T>
+int push_big_endian_byte(uint8_t* x, T y) {
+    auto y_addr = reinterpret_cast<uint8_t*>(&y);
+    const int N = sizeof(y) / sizeof(uint8_t);
+    for (int i = 0; i < N; i++) {
+        x[i] = y_addr[N-1-i];
+    }
+    return N;
+}
 
 // pad preamble bits to be byte aligned
 // 2x13-barker codes and 1x2-code and 1x4-code
@@ -174,7 +183,11 @@ int main(int argc, char** argv) {
 
                     // transmit the block
                     if (curr_tx_block_idx >= (block_size*2)) {
-                        fwrite(tx_block, 2, block_size, stdout);
+                        const size_t nb_write = fwrite(tx_block, sizeof(IQ_Symbol), block_size, stdout);
+                        if (nb_write != block_size) {
+                            fprintf(stderr, "Failed to write symbol %zu/%zu\n", nb_write, (size_t)block_size);
+                            return 0;
+                        }
                         curr_tx_block_idx = 0;
                         curr_block++;
 
@@ -212,10 +225,21 @@ int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms) {
     uint8_t I2 = (x & 0b00001100) >> 2;
     uint8_t Q2 = (x & 0b00000011);
 
-    I1 = _gray_code[I1]*8 + 128;
-    Q1 = _gray_code[Q1]*8 + 128;
-    I2 = _gray_code[I2]*8 + 128;
-    Q2 = _gray_code[Q2]*8 + 128;
+    const int A = 64;
+    const int B = 128;
+    // Average of QAM signal is 1.5 = (0+1+2+3)/4 = 6/4 = 3/2
+    const int DC = (uint8_t)((float)A * 1.5f);
+
+    static auto get_val = [A,B,DC](uint8_t v) {
+        int x = (int)_gray_code[v];
+        x = x*A + B - DC;
+        return (uint8_t)x;        
+    };
+
+    I1 = get_val(I1);
+    Q1 = get_val(Q1);
+    I2 = get_val(I2);
+    Q2 = get_val(Q2);
 
     syms[0].I = I1;
     syms[0].Q = Q1;
@@ -227,13 +251,23 @@ int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms) {
 
 int create_4QAM_symbols(uint8_t x, IQ_Symbol* syms) {
     // NOTE: 4QAM is already gray code by itself
+    const uint8_t A = 64;
+    const uint8_t B = 128;
+    // Average amplitude is 0.5 = (0+1)/2 = 0.5
+    const uint8_t DC = A/2;
+
+    static auto get_val = [A,B,DC](uint8_t v) {
+        const int x = (int)v*A + B - DC;
+        return (uint8_t)x;        
+    };
+
     int j = 0;
     for (int i = 0; i < 8; i+=2) {
         const int shift = 7-i;
         uint8_t I = (x >> shift    ) & 0x1;
         uint8_t Q = (x >> (shift-1)) & 0x1;
-        syms[j].I = I*8 + 128;
-        syms[j].Q = Q*8 + 128;
+        syms[j].I = get_val(I);
+        syms[j].Q = get_val(Q);
         j++;
     }
     return 4;
