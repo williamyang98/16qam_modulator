@@ -1,9 +1,18 @@
 #pragma once
 
+#include <stdint.h>
+#include <memory>
+#include <vector>
+
 // Connect all our code together
 #include "demodulator/qam_sync.h"
 #include "decoder/frame_decoder.h"
-#include "audio/audio_processor.h"
+#include "dsp/iir_filter.h"
+#include "dsp/filter_designer.h"
+#include "audio/frame.h"
+#include "utility/span.h"
+#include "utility/reconstruction_buffer.h"
+#include "utility/observable.h"
 
 #define PRINT_LOG 1
 #if PRINT_LOG 
@@ -13,7 +22,70 @@
   #define LOG_MESSAGE(...) (void)0
 #endif
 
-class AudioFrameHandler
+// Accepts an audio frame of 8bit data and appends it to an audio buffer
+// When that audio buffer has reached the end, it will print to stdout the buffer as a chunk
+// Then the index is reset to the beginning, and a new audio chunk is ready
+class AudioFilter {
+private:
+    const float Fs;
+    std::vector<Frame<float>> tmp_buffer;
+    std::unique_ptr<IIR_Filter<Frame<float>>> ac_filter;
+    std::unique_ptr<IIR_Filter<Frame<float>>> notch_filter;
+    std::vector<Frame<float>> output_buffer;
+    tcb::span<Frame<float>> output_span;
+    ReconstructionBuffer<Frame<float>> output_builder;
+    Observable<tcb::span<const Frame<float>>> obs_on_output_block;
+public:
+    AudioFilter(const int _output_length, const float _Fs)
+    :   Fs(_Fs),
+        output_buffer(_output_length),
+        output_span(output_buffer),
+        output_builder(output_span)
+    {
+        {
+            const int N_ac = TOTAL_TAPS_IIR_AC_COUPLE;
+            ac_filter = std::make_unique<IIR_Filter<Frame<float>>>(N_ac);
+            create_iir_ac_filter(ac_filter->get_b(), ac_filter->get_a(), 0.9999f);
+        }
+
+        {
+            const float k = 50.0f/(Fs/2.0f);
+            const float r = 0.9999f;
+            const int N_notch = TOTAL_TAPS_IIR_SECOND_ORDER_NOTCH_FILTER;
+            notch_filter = std::make_unique<IIR_Filter<Frame<float>>>(N_notch);
+            create_iir_notch_filter(notch_filter->get_b(), notch_filter->get_a(), k, r);
+        }
+    }
+
+    void ProcessFrame(const uint8_t* x, const int N) {
+        tmp_buffer.resize(N);
+        for (int i = 0; i < N; i++) {
+            float v = (float)x[i];
+            v = v / 255.0f;
+            tmp_buffer[i] = v;
+        }
+
+        ac_filter->process(tmp_buffer.data(), tmp_buffer.data(), N);
+        // notch_filter->process(tmp_buffer.data(), tmp_buffer.data(), N);
+
+        auto rd_buffer = tcb::span(tmp_buffer);
+        while (!rd_buffer.empty()) {
+            const auto nb_read = output_builder.ConsumeBuffer(tmp_buffer);
+            rd_buffer = rd_buffer.subspan(nb_read);
+            if (output_builder.IsFull()) {
+                obs_on_output_block.Notify(output_buffer);
+                output_builder.Reset();
+            }
+        }
+    }
+
+    int GetOutputBufferSize() { return (int)output_buffer.size(); }
+    auto GetOutputBuffer() { return tcb::span(output_buffer); }
+    auto& OnOutputBlock() { return obs_on_output_block; }
+};
+
+// Handle data frames
+class FrameHandler
 {
 public:
     struct {
@@ -39,9 +111,9 @@ public:
     bool is_output_audio = true;
     bool is_output_data = false;
 private:
-    AudioProcessor& audio;
+    AudioFilter& audio;
 public: 
-    AudioFrameHandler(AudioProcessor& _audio)
+    FrameHandler(AudioFilter& _audio)
     : audio(_audio) {}
 
     void OnFrameResult(
@@ -89,6 +161,7 @@ public:
     }
 };
 
+// Connect our code together into a cohesive 16QAM receiver
 class App 
 {
 public:
@@ -107,8 +180,8 @@ private:
 
     std::unique_ptr<QAM_Synchroniser> qam_sync;
     std::unique_ptr<FrameDecoder> frame_decoder;
-    std::unique_ptr<AudioFrameHandler> audio_frame_handler;
-    std::unique_ptr<AudioProcessor> audio_processor;
+    std::unique_ptr<FrameHandler> audio_frame_handler;
+    std::unique_ptr<AudioFilter> audio_filter;
 public:
     App(
         FILE* _rx_fp, const int demod_block_size,
@@ -134,8 +207,8 @@ public:
                 crc8_polynomial);
         }
 
-        audio_processor = std::make_unique<AudioProcessor>(audio_block_size, F_audio);
-        audio_frame_handler = std::make_unique<AudioFrameHandler>(*(audio_processor.get()));
+        audio_filter = std::make_unique<AudioFilter>(audio_block_size, F_audio);
+        audio_frame_handler = std::make_unique<FrameHandler>(*(audio_filter.get()));
 
         // NOTE: Demodulator has to be built by user
     }
@@ -186,7 +259,7 @@ public:
 public:
     auto& GetActiveBuffer() { return *(active_buffer.get()); }
     auto& GetSnapshotBuffer() { return *(snapshot_buffer.get()); }
-    auto& GetAudioProcessor() { return *(audio_processor.get()); }
+    auto& GetAudioFilter() { return *(audio_filter.get()); }
     auto& GetFrameHandler() { return *(audio_frame_handler.get()); }
 private:
     bool ReadFlag(bool& flag) {

@@ -10,6 +10,9 @@
 #endif
 
 #include "app.h"
+#include "audio/portaudio_output.h"
+#include "audio/resampled_pcm_player.h"
+#include "audio/portaudio_utility.h"
 #include "utility/getopt/getopt.h"
 
 // GUI
@@ -24,6 +27,9 @@
 #include "imgui_config.h"
 #include "font_awesome_definitions.h"
 
+int RenderAll(App& app, PaDeviceList& device_list, PortAudio_Output& audio_output);
+void RenderApp(App& app);
+void RenderPortAudioControls(PaDeviceList& device_list, PortAudio_Output& audio_output);
 
 void usage() {
     fprintf(stderr, 
@@ -43,8 +49,6 @@ void usage() {
         "\t[-h (show usage)]\n"
     );
 }
-
-int render_app(App& app);
 
 int main(int argc, char** argv)
 {
@@ -175,10 +179,35 @@ int main(int argc, char** argv)
     app.BuildDemodulator();
     app.GetFrameHandler().is_output_audio = is_output_audio;
 
+    // Setup audio
+    auto pa_handler = ScopedPaHandler();
+    PaDeviceList pa_devices;
+    PortAudio_Output pa_output;
+    std::unique_ptr<Resampled_PCM_Player> pcm_player;
+    {
+        auto& mixer = pa_output.GetMixer();
+        auto buf = mixer.CreateManagedBuffer(4);
+        auto Fs = pa_output.GetSampleRate();
+        pcm_player = std::make_unique<Resampled_PCM_Player>(buf, Fs);
+
+        #ifdef _WIN32
+        const auto target_host_api_index = Pa_HostApiTypeIdToHostApiIndex(PORTAUDIO_TARGET_HOST_API_ID);
+        const auto target_device_index = Pa_GetHostApiInfo(target_host_api_index)->defaultOutputDevice;
+        pa_output.Open(target_device_index);
+        #else
+        pa_output.Open(Pa_GetDefaultOutputDevice());
+        #endif
+    }
+
+    app.GetAudioFilter().OnOutputBlock().Attach([&pcm_player, Faudio](tcb::span<const Frame<float>> data) {
+        pcm_player->SetInputSampleRate((int)Faudio);
+        pcm_player->ConsumeBuffer(data);
+    });
+
     auto demod_thread = std::thread([&app]() {
         app.Run();
     });
-    const auto rv = render_app(app);
+    const auto rv = RenderAll(app, pa_devices, pa_output);
     app.Stop();
     demod_thread.join();
     fclose(fp_in);
@@ -206,8 +235,7 @@ static void glfw_window_focus_callback(GLFWwindow* window, int focused)
     is_main_window_focused = focused;
 }
 
-
-int render_app(App& app) {
+int RenderAll(App& app, PaDeviceList& device_list, PortAudio_Output& audio_output) {
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
@@ -305,32 +333,8 @@ int render_app(App& app) {
         io.Fonts->AddFontFromFileTTF("res/font_awesome.ttf", 16.0f, &icons_config, icons_ranges);
     }
 
-    // swap between live and snapshot buffer
-    auto* active_buffer = &(app.GetActiveBuffer());
-    auto* snapshot_buffer = &(app.GetSnapshotBuffer());
-    auto* render_buffer = active_buffer;
-
-    // save demodulated audio
-    const int16_t audio_gain_min = 0;
-    const int16_t audio_gain_max = 32;
-
-    const auto original_qam_sync_spec = app.qam_sync_spec;
-    const int shared_block_size = render_buffer->GetInputSize();
-
-    auto get_xscale = [shared_block_size](const int N) -> double {
-        const double x = (double)shared_block_size / (double)N;
-        return x;
-    };
 
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-    double x_min = 0.0f;
-    double x_max = (double)shared_block_size;
-    double audio_x_min = 0.0f;
-    double audio_x_max = (double)app.GetAudioProcessor().GetOutputBufferSize();
-    double iq_stream_y_min = -1.25f;
-    double iq_stream_y_max =  1.25f;
-    double iq_stream_raw_y_min = -128.0f;
-    double iq_stream_raw_y_max = +128.0f;
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -355,206 +359,16 @@ int render_app(App& app) {
 
         ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
 
-        ImGui::Begin("Telemetry");
-        {
+        if (ImGui::Begin("Telemetry")) {
             auto dockspace_id = ImGui::GetID("Telemetry dockspace");
             ImGui::DockSpace(dockspace_id);
         }
         ImGui::End();
 
-        ImGui::Begin("PCM 16Bit Buffer");
-        if (ImPlot::BeginPlot("##Audio buffer")) {
-            static double y0 = static_cast<double>(INT16_MAX);
-            static double y1 = static_cast<double>(INT16_MIN);
-            auto& audio_processor = app.GetAudioProcessor();
-            auto buf = audio_processor.GetOutputBuffer();
-            ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, y1, y0, ImPlotCond_Once);
-            ImPlot::PlotLine("Audio", buf.data(), (int)buf.size());
-            ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
-            ImPlot::DragLineY(1, &y1, ImVec4(1,0,0,1), 1);
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
+        RenderApp(app);
 
-        if (ImGui::Begin("Controls")) {
-            const bool is_rendering_snapshot = (render_buffer == snapshot_buffer);
-            if (!is_rendering_snapshot) {
-                if (ImGui::Button("Snapshot")) {
-                    app.controls.snapshot = true;
-                    render_buffer = snapshot_buffer;
-                }
-            } else {
-                if (ImGui::Button("Resume")) {
-                    render_buffer = active_buffer;
-                }
-            }
-
-            auto& audio_processor = app.GetAudioProcessor();
-            auto& frame_handler = app.GetFrameHandler();
-            auto& audio_gain = audio_processor.output_gain;
-            ImGui::SliderScalar("Audio gain", ImGuiDataType_S16, &audio_gain, &audio_gain_min, &audio_gain_max);
-            ImGui::Checkbox("Output Audio", &(frame_handler.is_output_audio));
-            ImGui::Checkbox("Output Data", &(frame_handler.is_output_data));
-            ImGui::End();
-        }
-
-        if (ImGui::Begin("Statistics")) {
-            auto& frame_handler = app.GetFrameHandler();
-            auto& stats = frame_handler.stats;
-            ImGui::Text("Received=%d\n", stats.total);
-            ImGui::Text("Correct=%d\n", stats.correct);
-            ImGui::Text("Incorrect=%d\n", stats.incorrect);
-            ImGui::Text("Corrupted=%d\n", stats.corrupted);
-            ImGui::Text("Repaired=%d\n", stats.repaired);
-            ImGui::Text("Packet error rate=%.2f%%\n", stats.GetPacketErrorRate()*100.0f);
-            ImGui::Text("Packet repair rate=%.2f%%\n", stats.GetRepairFailureRate()*100.0f);
-
-            if (ImGui::Button("Reset")) {
-                stats.reset();
-            }
-            ImGui::End();
-        }
-
-
-        ImGui::Begin("Constellation");
-        if (ImPlot::BeginPlot("##Constellation", ImVec2(-1,0), ImPlotFlags_Equal)) {
-            ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, -2, 2, ImPlotCond_Once);
-            const float marker_size = 3.0f;
-            {
-                const auto buf = render_buffer->y_sym_out;
-                const int N = (int)buf.size();
-                auto* data = reinterpret_cast<float*>(buf.data());
-                ImPlot::SetNextMarkerStyle(0, marker_size);
-                ImPlot::PlotScatter("IQ demod", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
-            }
-            {
-                const auto buf = render_buffer->x_pll_out;
-                const int N = (int)buf.size();
-                auto* data = reinterpret_cast<float*>(buf.data());
-                ImPlot::HideNextItem(true, ImPlotCond_Once);
-                ImPlot::SetNextMarkerStyle(0, marker_size);
-                ImPlot::PlotScatter("IQ raw", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
-            }
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-
-        ImGui::Begin("Symbol out");
-        if (ImPlot::BeginPlot("Symbol out")) {
-            auto buf = render_buffer->y_sym_out;
-            const int N = (int)buf.size();
-            auto* data = reinterpret_cast<float*>(buf.data());
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::EndPlot();
-        }
-        if (ImPlot::BeginPlot("PLL out")) {
-            auto buf = render_buffer->x_pll_out;
-            const int N = (int)buf.size();
-            auto* data = reinterpret_cast<float*>(buf.data());
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::EndPlot();
-        }
-        if (ImPlot::BeginPlot("Upsampled")) {
-            auto buf = render_buffer->x_upsampled;
-            const int N = (int)buf.size();
-            auto* data = reinterpret_cast<float*>(buf.data());
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-
-        ImGui::Begin("Raw signals");
-        if (ImPlot::BeginPlot("Raw Signal")) {
-            auto buf = render_buffer->x_in;
-            const int N = (int)buf.size();
-            auto* data = reinterpret_cast<float*>(buf.data());
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
-            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::EndPlot();
-        }
-        if (ImPlot::BeginPlot("Downsampled signal")) {
-            auto buf = render_buffer->x_downsampled;
-            const int N = (int)buf.size();
-            auto* data = reinterpret_cast<float*>(buf.data());
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
-            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-
-        ImGui::Begin("Errors");
-        if (ImPlot::BeginPlot("##Errors")) {
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            auto buf0 = render_buffer->error_pll;
-            auto buf1 = render_buffer->error_ted;
-            const int N0 = (int)buf0.size();
-            const int N1 = (int)buf1.size();
-            ImPlot::PlotLine("PLL error", buf0.data(), N0, get_xscale(N0));
-            ImPlot::PlotLine("TED error", buf1.data(), N1, get_xscale(N1));
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-
-        ImGui::Begin("Triggers");
-        if (ImPlot::BeginPlot("##Triggers")) {
-            ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, -0.2, 1.5, ImPlotCond_Once);
-            auto buf0 = render_buffer->trig_zero_crossing;
-            auto buf1 = render_buffer->trig_ted_clock;
-            auto buf2 = render_buffer->trig_integrator_dump;
-            const int N0 = (int)buf0.size();
-            const int N1 = (int)buf1.size();
-            const int N2 = (int)buf2.size();
-
-            ImPlot::PlotStems("Zero crossing", (uint8_t*)buf0.data(), N0, 0.0f, get_xscale(N0));
-            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)buf1.data(), N1, 0.0f, get_xscale(N1));
-            ImPlot::PlotStems("Integrate+dump", (uint8_t*)buf2.data(), N2, 0.0f, get_xscale(N2));
-            ImPlot::EndPlot();
-        }
-        ImGui::End();
-
-        ImGui::Begin("Spec Builder");
-        {
-            auto& spec = app.qam_sync_spec;
-            const float A = 100e3;
-            const float B = 10e3;
-            const float C = 10e3;
-            ImGui::SliderInt("Downsampling filter size", &spec.downsampling_filter.K, 2, 20);
-            ImGui::SliderInt("Upsampling filter size", &spec.upsampling_filter.K, 2, 20);
-            ImGui::SliderFloat("AC Filter", &spec.ac_filter.k, 0.9999f, 1.0f);
-            ImGui::SliderFloat("AGC beta", &spec.agc.beta, 0.0f, 1.0f);
-            ImGui::SliderFloat("Carrier PLL Fcenter", &spec.carrier_pll.f_center, -B, B);
-            ImGui::SliderFloat("Carrier PLL Fgain", &spec.carrier_pll.f_gain, 0e3, A);
-            ImGui::SliderFloat("Carrier PLL Filter Cutoff", &spec.carrier_pll_filter.butterworth_cutoff, 0e3, A);
-            ImGui::SliderFloat("Carrier PLL Filter Integrator", &spec.carrier_pll_filter.integrator_gain, 0e3, C);
-            ImGui::SliderFloat("TED PLL Fgain", &spec.ted_pll.f_gain, 0e3, A);
-            ImGui::SliderFloat("TED PLL Foffset", &spec.ted_pll.f_offset, -A, A);
-            ImGui::SliderFloat("TED PLL Filter Cutoff", &spec.ted_pll_filter.butterworth_cutoff, 0e3, A);
-            ImGui::SliderFloat("TED PLL Filter Integrator", &spec.ted_pll_filter.integrator_gain, 0e3, C);
-            
-            if (ImGui::Button("Build")) {
-                app.controls.rebuild = true;
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("Revert to default")) {
-                app.qam_sync_spec = original_qam_sync_spec;
-            }
+        if (ImGui::Begin("Audio Controls")) {
+            RenderPortAudioControls(device_list, audio_output);
         }
         ImGui::End();
 
@@ -594,4 +408,301 @@ int render_app(App& app) {
     glfwTerminate();
 
     return 0;
+}
+
+void RenderApp(App& app) {
+    // swap between live and snapshot buffer
+    auto* active_buffer = &(app.GetActiveBuffer());
+    auto* snapshot_buffer = &(app.GetSnapshotBuffer());
+    auto* render_buffer = active_buffer;
+
+    // save demodulated audio
+    const auto original_qam_sync_spec = app.qam_sync_spec;
+    const int shared_block_size = render_buffer->GetInputSize();
+
+    auto get_xscale = [shared_block_size](const int N) -> double {
+        const double x = (double)shared_block_size / (double)N;
+        return x;
+    };
+
+    double x_min = 0.0f;
+    double x_max = (double)shared_block_size;
+    double audio_x_min = 0.0f;
+    double audio_x_max = (double)app.GetAudioFilter().GetOutputBufferSize();
+    double iq_stream_y_min = -1.25f;
+    double iq_stream_y_max =  1.25f;
+    double iq_stream_raw_y_min = -128.0f;
+    double iq_stream_raw_y_max = +128.0f;
+
+
+    ImGui::Begin("PCM 16Bit Buffer");
+    if (ImPlot::BeginPlot("##Audio buffer")) {
+        auto& audio_filter = app.GetAudioFilter();
+        auto buf = audio_filter.GetOutputBuffer();
+        const int N = (int)buf.size();
+        auto* data = reinterpret_cast<const float*>(buf.data());
+
+        ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, -1.0f, 1.0f, ImPlotCond_Once);
+        ImPlot::PlotLine("Left", &data[0], N, 1, 0, 0, 0, 2*sizeof(float));
+        ImPlot::PlotLine("Right", &data[1], N, 1, 0, 0, 0, 2*sizeof(float));
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+
+    if (ImGui::Begin("Controls")) {
+        const bool is_rendering_snapshot = (render_buffer == snapshot_buffer);
+        if (!is_rendering_snapshot) {
+            if (ImGui::Button("Snapshot")) {
+                app.controls.snapshot = true;
+                render_buffer = snapshot_buffer;
+            }
+        } else {
+            if (ImGui::Button("Resume")) {
+                render_buffer = active_buffer;
+            }
+        }
+
+        auto& audio_filter = app.GetAudioFilter();
+        auto& frame_handler = app.GetFrameHandler();
+        ImGui::Checkbox("Output Audio", &(frame_handler.is_output_audio));
+        ImGui::Checkbox("Output Data", &(frame_handler.is_output_data));
+        ImGui::End();
+    }
+
+    if (ImGui::Begin("Statistics")) {
+        auto& frame_handler = app.GetFrameHandler();
+        auto& stats = frame_handler.stats;
+        ImGui::Text("Received=%d\n", stats.total);
+        ImGui::Text("Correct=%d\n", stats.correct);
+        ImGui::Text("Incorrect=%d\n", stats.incorrect);
+        ImGui::Text("Corrupted=%d\n", stats.corrupted);
+        ImGui::Text("Repaired=%d\n", stats.repaired);
+        ImGui::Text("Packet error rate=%.2f%%\n", stats.GetPacketErrorRate()*100.0f);
+        ImGui::Text("Packet repair rate=%.2f%%\n", stats.GetRepairFailureRate()*100.0f);
+
+        if (ImGui::Button("Reset")) {
+            stats.reset();
+        }
+        ImGui::End();
+    }
+
+
+    ImGui::Begin("Constellation");
+    if (ImPlot::BeginPlot("##Constellation", ImVec2(-1,0), ImPlotFlags_Equal)) {
+        ImPlot::SetupAxisLimits(ImAxis_X1, -2, 2, ImPlotCond_Once);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, -2, 2, ImPlotCond_Once);
+        const float marker_size = 3.0f;
+        {
+            const auto buf = render_buffer->y_sym_out;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
+            ImPlot::SetNextMarkerStyle(0, marker_size);
+            ImPlot::PlotScatter("IQ demod", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
+        }
+        {
+            const auto buf = render_buffer->x_pll_out;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
+            ImPlot::HideNextItem(true, ImPlotCond_Once);
+            ImPlot::SetNextMarkerStyle(0, marker_size);
+            ImPlot::PlotScatter("IQ raw", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
+        }
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+
+    ImGui::Begin("Symbol out");
+    if (ImPlot::BeginPlot("Symbol out")) {
+        auto buf = render_buffer->y_sym_out;
+        const int N = (int)buf.size();
+        auto* data = reinterpret_cast<float*>(buf.data());
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+        ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::EndPlot();
+    }
+    if (ImPlot::BeginPlot("PLL out")) {
+        auto buf = render_buffer->x_pll_out;
+        const int N = (int)buf.size();
+        auto* data = reinterpret_cast<float*>(buf.data());
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+        ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::EndPlot();
+    }
+    if (ImPlot::BeginPlot("Upsampled")) {
+        auto buf = render_buffer->x_upsampled;
+        const int N = (int)buf.size();
+        auto* data = reinterpret_cast<float*>(buf.data());
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+        ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+
+    ImGui::Begin("Raw signals");
+    if (ImPlot::BeginPlot("Raw Signal")) {
+        auto buf = render_buffer->x_in;
+        const int N = (int)buf.size();
+        auto* data = reinterpret_cast<float*>(buf.data());
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
+        ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::EndPlot();
+    }
+    if (ImPlot::BeginPlot("Downsampled signal")) {
+        auto buf = render_buffer->x_downsampled;
+        const int N = (int)buf.size();
+        auto* data = reinterpret_cast<float*>(buf.data());
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
+        ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+
+    ImGui::Begin("Errors");
+    if (ImPlot::BeginPlot("##Errors")) {
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        auto buf0 = render_buffer->error_pll;
+        auto buf1 = render_buffer->error_ted;
+        const int N0 = (int)buf0.size();
+        const int N1 = (int)buf1.size();
+        ImPlot::PlotLine("PLL error", buf0.data(), N0, get_xscale(N0));
+        ImPlot::PlotLine("TED error", buf1.data(), N1, get_xscale(N1));
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+
+    ImGui::Begin("Triggers");
+    if (ImPlot::BeginPlot("##Triggers")) {
+        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, -0.2, 1.5, ImPlotCond_Once);
+        auto buf0 = render_buffer->trig_zero_crossing;
+        auto buf1 = render_buffer->trig_ted_clock;
+        auto buf2 = render_buffer->trig_integrator_dump;
+        const int N0 = (int)buf0.size();
+        const int N1 = (int)buf1.size();
+        const int N2 = (int)buf2.size();
+
+        ImPlot::PlotStems("Zero crossing", (uint8_t*)buf0.data(), N0, 0.0f, get_xscale(N0));
+        ImPlot::PlotStems("Ramp oscillator", (uint8_t*)buf1.data(), N1, 0.0f, get_xscale(N1));
+        ImPlot::PlotStems("Integrate+dump", (uint8_t*)buf2.data(), N2, 0.0f, get_xscale(N2));
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+
+    ImGui::Begin("Spec Builder");
+    {
+        auto& spec = app.qam_sync_spec;
+        const float A = 100e3;
+        const float B = 10e3;
+        const float C = 10e3;
+        ImGui::SliderInt("Downsampling filter size", &spec.downsampling_filter.K, 2, 20);
+        ImGui::SliderInt("Upsampling filter size", &spec.upsampling_filter.K, 2, 20);
+        ImGui::SliderFloat("AC Filter", &spec.ac_filter.k, 0.9999f, 1.0f);
+        ImGui::SliderFloat("AGC beta", &spec.agc.beta, 0.0f, 1.0f);
+        ImGui::SliderFloat("Carrier PLL Fcenter", &spec.carrier_pll.f_center, -B, B);
+        ImGui::SliderFloat("Carrier PLL Fgain", &spec.carrier_pll.f_gain, 0e3, A);
+        ImGui::SliderFloat("Carrier PLL Filter Cutoff", &spec.carrier_pll_filter.butterworth_cutoff, 0e3, A);
+        ImGui::SliderFloat("Carrier PLL Filter Integrator", &spec.carrier_pll_filter.integrator_gain, 0e3, C);
+        ImGui::SliderFloat("TED PLL Fgain", &spec.ted_pll.f_gain, 0e3, A);
+        ImGui::SliderFloat("TED PLL Foffset", &spec.ted_pll.f_offset, -A, A);
+        ImGui::SliderFloat("TED PLL Filter Cutoff", &spec.ted_pll_filter.butterworth_cutoff, 0e3, A);
+        ImGui::SliderFloat("TED PLL Filter Integrator", &spec.ted_pll_filter.integrator_gain, 0e3, C);
+        
+        if (ImGui::Button("Build")) {
+            app.controls.rebuild = true;
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button("Revert to default")) {
+            app.qam_sync_spec = original_qam_sync_spec;
+        }
+    }
+    ImGui::End();
+}
+
+void RenderPortAudioControls(PaDeviceList& device_list, PortAudio_Output& audio_output) {
+    auto& devices = device_list.GetDevices();
+
+    const auto selected_index = audio_output.GetSelectedIndex();
+    const char* selected_name = "Unselected";
+    for (auto& device: devices) {
+        if (device.index == selected_index) {
+            selected_name = device.label.c_str();
+            break;
+        }
+    }
+
+    ImGui::Text("Output Devices (%d)", (int)devices.size());
+    ImGui::PushItemWidth(-1.0f);
+    if (ImGui::BeginCombo("###Output Devices", selected_name, ImGuiComboFlags_None)) {
+        for (auto& device: devices) {
+            const bool is_selected = (device.index == selected_index);
+            ImGui::PushID(device.index);
+            if (ImGui::Selectable(device.label.c_str(), is_selected)) {
+                if (!is_selected) {
+                    audio_output.Open(device.index);
+                }
+            }
+            if (is_selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopItemWidth();
+
+    auto& mixer = audio_output.GetMixer();
+    auto& volume_gain = mixer.GetOutputGain();
+
+    static bool is_overgain = false;
+    static float last_unmuted_volume = 0.0f;
+
+    bool is_muted = (volume_gain == 0.0f);
+    const float max_gain = is_overgain ? 6.0f : 2.0f;
+    if (!is_overgain) {
+        volume_gain = (volume_gain > max_gain) ? max_gain : volume_gain;
+    }
+
+    ImGui::PushItemWidth(-1.0f);
+    ImGui::Text("Volume");
+
+    const float volume_scale = 100.0f;
+    float curr_volume = volume_gain * volume_scale;
+    if (ImGui::SliderFloat("###Volume", &curr_volume, 0.0f, max_gain*volume_scale, "%.0f", ImGuiSliderFlags_AlwaysClamp)) {
+        volume_gain = (curr_volume / volume_scale);
+        if (volume_gain > 0.0f) {
+            last_unmuted_volume = volume_gain;
+        } else {
+            last_unmuted_volume = 1.0f;
+        }
+    }
+    ImGui::PopItemWidth();
+
+    if (is_muted) {
+        if (ImGui::Button("Unmute")) {
+            volume_gain = last_unmuted_volume;
+        }
+    } else {
+        if (ImGui::Button("Mute")) {
+            last_unmuted_volume = volume_gain;
+            volume_gain = 0.0f;
+        }
+    }
+
+    ImGui::SameLine();
+
+    if (ImGui::Button(is_overgain ? "Normal gain" : "Boost gain")) {
+        is_overgain = !is_overgain;
+    }
 }

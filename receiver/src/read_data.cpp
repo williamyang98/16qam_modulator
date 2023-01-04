@@ -9,13 +9,17 @@
 #endif
 
 #include "app.h"
+#include "audio/portaudio_output.h"
+#include "audio/resampled_pcm_player.h"
+#include "audio/portaudio_utility.h"
+#include "dsp/common.h"
 #include "utility/getopt/getopt.h"
 
 void usage() {
     fprintf(stderr, 
         "read_data, runs 16QAM demodulation on raw IQ values\n\n"
         "\t[-f sample rate (default: 1MHz)]\n"
-        "\t[-s symbol rate (default: 87kHz)]\n"
+        "\t[-s symbol rate (default: 200kHz)]\n"
         "\t[-b block size (default: 8192)]\n"
         "\t[-D downsample factor (default: 2)]\n"
         "\t[-S upsample factor (default: 4)]\n"
@@ -24,7 +28,7 @@ void usage() {
         "\t    rd_block_size -> block_size -> us_block_size\n"
         "\t[-i input filename (default: None)]\n"
         "\t    If no file is provided then stdin is used\n"
-        "\t[-g audio gain (default: 3)]\n"
+        "\t[-g audio gain (default: 100)]\n"
         "\t[-A toggle audio output (default: true)]\n"
         "\t[-h (show usage)]\n"
     );
@@ -36,10 +40,10 @@ int main(int argc, char **argv) {
 
     int demod_block_size = 8192;
     float Fsample = 1e6;
-    float Fsymbol = 87e3;
+    float Fsymbol = 200e3;
     char* filename = NULL;
 
-    int audio_gain = 3;
+    int audio_gain = 100;
     // audio stream is symbol_rate / N
     const int audio_packet_sampling_ratio = 5;
     bool is_output_audio = true;
@@ -102,6 +106,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    audio_gain = dsp::clamp(audio_gain, 0, 1000);
+
     FILE* fp_in = stdin;
     if (filename != NULL) {
         errno_t err = fopen_s(&fp_in, filename, "r");
@@ -153,6 +159,33 @@ int main(int argc, char **argv) {
         spec.ted_pll_filter.butterworth_cutoff = 60e3;
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
+
+    // Setup audio
+    auto pa_handler = ScopedPaHandler();
+    PaDeviceList pa_devices;
+    PortAudio_Output pa_output;
+    std::unique_ptr<Resampled_PCM_Player> pcm_player;
+    {
+        auto& mixer = pa_output.GetMixer();
+        auto buf = mixer.CreateManagedBuffer(4);
+        auto Fs = pa_output.GetSampleRate();
+        pcm_player = std::make_unique<Resampled_PCM_Player>(buf, Fs);
+
+        #ifdef _WIN32
+        const auto target_host_api_index = Pa_HostApiTypeIdToHostApiIndex(PORTAUDIO_TARGET_HOST_API_ID);
+        const auto target_device_index = Pa_GetHostApiInfo(target_host_api_index)->defaultOutputDevice;
+        pa_output.Open(target_device_index);
+        #else
+        pa_output.Open(Pa_GetDefaultOutputDevice());
+        #endif
+    }
+
+    pa_output.GetMixer().GetOutputGain() = (float)audio_gain / 100.0f;
+
+    app.GetAudioFilter().OnOutputBlock().Attach([&pcm_player, Faudio](tcb::span<const Frame<float>> data) {
+        pcm_player->SetInputSampleRate((int)Faudio);
+        pcm_player->ConsumeBuffer(data);
+    });
     
     app.BuildDemodulator();
     app.Run();
