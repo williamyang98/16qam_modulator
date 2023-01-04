@@ -1,210 +1,29 @@
 #include <stdio.h>
 
-// graphics code
-#include "imgui.h"
-#include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
-#if defined(IMGUI_IMPL_OPENGL_ES2)
-#include <GLES2/gl2.h>
-#endif
-#include <GLFW/glfw3.h> // Will drag system OpenGL headers
-
-// implot library
-#include "implot.h"
-
-// our imgui extras
-#include "imgui_config.h"
-#include "font_awesome_definitions.h"
-
 #include <thread>
 #include <stdlib.h>
 #include <stdint.h>
 
-#include "demod/qam_demodulator.h"
-#include "demod/audio_processor.h"
-
-#include "utility/getopt/getopt.h"
-
+#if defined(_WIN32)
 #include <io.h>
 #include <fcntl.h>
-
-#define PRINT_LOG 1
-#if PRINT_LOG 
-  #define LOG_MESSAGE(...) fprintf(stderr, ##__VA_ARGS__)
-#else
-  #define LOG_MESSAGE(...) (void)0
 #endif
 
+#include "app.h"
+#include "utility/getopt/getopt.h"
 
-// [Win32] Our example includes a copy of glfw3.lib pre-compiled with VS2010 to maximize ease of testing and compatibility with old VS compilers.
-// To link with VS2010-era libraries, VS2015+ requires linking with legacy_stdio_definitions.lib, which we do using this pragma.
-// Your own project should not be affected, as you are likely to link with a newer binary of GLFW that is adequate for your version of Visual Studio.
-#if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
-#pragma comment(lib, "legacy_stdio_definitions")
+// GUI
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
+#if defined(IMGUI_IMPL_OPENGL_ES2)
+#include <GLES2/gl2.h>
 #endif
+#include <GLFW/glfw3.h> // Will drag system OpenGL headers
+#include <implot.h>
+#include "imgui_config.h"
+#include "font_awesome_definitions.h"
 
-int is_main_window_focused = true;
-
-static void glfw_error_callback(int error, const char* description)
-{
-    LOG_MESSAGE("Glfw Error %d: %s\n", error, description);
-}
-
-// this occurs when we minimise or change focus to another window
-static void glfw_window_focus_callback(GLFWwindow* window, int focused)
-{
-    is_main_window_focused = focused;
-}
-
-class AudioFrameHandler: public QAM_Demodulator_Callback
-{
-public:
-    struct {
-        int total = 0;
-        int incorrect = 0;
-        int correct = 0;
-        int corrupted = 0;
-        int repaired = 0;
-        float GetPacketErrorRate() {
-            return  (float)incorrect / (float)total;
-        }
-        float GetRepairFailureRate() {
-            return (float)repaired / (float)correct;
-        }
-        void reset() {
-            total = 0;
-            incorrect = 0;
-            correct = 0;
-            corrupted = 0;
-            repaired = 0;
-        }
-    } stats;
-    bool is_output_audio = true;
-    bool is_output_data = false;
-private:
-    const int frame_length;
-    AudioProcessor* audio;
-public: 
-    AudioFrameHandler(AudioProcessor* _audio, const int _frame_length)
-    : frame_length(_frame_length), audio(_audio) {}
-public:
-    virtual void OnFrameResult(
-        FrameSynchroniser::Result res, 
-        FrameDecoder::Payload payload)
-    {
-        using Res = FrameSynchroniser::Result;
-        switch (res) {
-        case Res::PREAMBLE_FOUND:
-            break;
-        case Res::BLOCK_SIZE_OK:
-            break;
-        case Res::BLOCK_SIZE_ERR:
-            LOG_MESSAGE("Got invalid block size: %d\n", payload.length);
-            stats.corrupted++;
-            break;
-        case Res::PAYLOAD_ERR:
-            stats.total++;
-            stats.incorrect++;
-            break;
-        case Res::PAYLOAD_OK:
-            stats.total++;
-            stats.correct++;
-            if (payload.decoded_error > 0) {
-                stats.repaired++;
-            }
-            if (payload.length == frame_length) {
-                if (is_output_audio) {
-                    audio->ProcessFrame(payload.buf, payload.length);
-                }
-            } else {
-                if (is_output_data) {
-                    LOG_MESSAGE("Received data[%d]=%.*s\n", 
-                        (int)payload.length, 
-                        (int)payload.length, reinterpret_cast<char*>(payload.buf));
-                }
-            }
-            break;
-        case Res::NONE:
-        default:
-            break;
-        }
-    }
-};
-
-class App {
-public:
-    CarrierDemodulatorSpecification carrier_demod_spec;
-    QAM_Demodulator_Specification qam_spec;
-    ConstellationSpecification* constellation = NULL;
-    FILE* rx_fp = NULL;
-
-    AudioProcessor* audio_processor = NULL;
-    AudioFrameHandler* audio_frame_handler = NULL;
-    CarrierToSymbolDemodulatorBuffers* carrier_demod_buffer = NULL;
-    CarrierToSymbolDemodulatorBuffers* snapshot_buffer = NULL;
-private:
-    QAM_Demodulator* qam_demodulator = NULL;
-public:
-    struct {
-        bool rebuild = false;
-        bool snapshot = false;
-    } controls;
-    bool is_read_loop = false;
-    bool is_running = true;
-public:
-    App() {}
-    void Run() {
-        is_running = true;
-        int rd_total_blocks = 0;
-        while (is_running) {
-            auto rx_buffer = carrier_demod_buffer->x_raw;
-            auto rx_length = carrier_demod_buffer->GetInputSize();
-            size_t rd_block_size = fread(rx_buffer.data(), sizeof(std::complex<uint8_t>), rx_length, rx_fp);
-            if (rd_block_size != rx_length) {
-                LOG_MESSAGE("Got mismatched block size after %d blocks\n", rd_total_blocks);
-                if (is_read_loop) {
-                    fseek(rx_fp, 0, 0);
-                    continue;
-                }
-                break;
-            }
-            rd_total_blocks++; 
-
-            if (qam_demodulator != NULL) {
-                qam_demodulator->Process(carrier_demod_buffer);
-            }
-
-            if (ReadFlag(controls.snapshot)) {
-                snapshot_buffer->CopyFrom(carrier_demod_buffer);
-            }
-
-            if (ReadFlag(controls.rebuild)) {
-                BuildDemodulator();
-            }
-        }
-    }
-    void Stop() {
-        is_running = false;
-    }
-    void BuildDemodulator() {
-        if (qam_demodulator != NULL) {
-            delete qam_demodulator;
-        }
-        qam_demodulator = new QAM_Demodulator(carrier_demod_spec, qam_spec, constellation);
-        qam_demodulator->SetCallback(audio_frame_handler);
-    }
-private:
-    bool ReadFlag(bool& flag) {
-        const bool rv = flag;
-        flag = false;
-        return rv;
-    }
-};
-
-void demodulator_thread(App* app) 
-{
-    app->Run();
-}
 
 void usage() {
     fprintf(stderr, 
@@ -225,12 +44,13 @@ void usage() {
     );
 }
 
+int render_app(App& app);
+
 int main(int argc, char** argv)
 {
     int ds_factor = 2;
     int us_factor = 4;
-
-    int block_size = 1024;
+    int demod_block_size = 1024;
     float Fsample = 1e6; 
     float Fsymbol = 200e3;
 
@@ -259,9 +79,9 @@ int main(int argc, char** argv)
             }
             break;
         case 'b':
-            block_size = (int)(atof(optarg));
-            if (block_size <= 0) {
-                fprintf(stderr, "Block size must be positive (%d)\n", block_size); 
+            demod_block_size = (int)(atof(optarg));
+            if (demod_block_size <= 0) {
+                fprintf(stderr, "Block size must be positive (%d)\n", demod_block_size); 
                 return 1;
             }
             break;
@@ -309,31 +129,25 @@ int main(int argc, char** argv)
         }
     }
 
+#if defined(_WIN32)
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
     _setmode(_fileno(fp_in), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
+#endif
 
     const float Faudio = Fsymbol/(float)audio_packet_sampling_ratio;
     const int audio_buffer_size = (int)(std::ceilf(Faudio));
+    const int decoder_buffer_size = 1024;
 
-    auto app = new App();
-    app->constellation = new SquareConstellation(4);
-    app->rx_fp = fp_in;
-
-    const int audio_frame_length = 100;
-    app->audio_processor = new AudioProcessor(audio_buffer_size, audio_frame_length, Faudio);
-    app->audio_frame_handler = new AudioFrameHandler(app->audio_processor, audio_frame_length);
-    app->carrier_demod_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
-    app->snapshot_buffer = new CarrierToSymbolDemodulatorBuffers(block_size, ds_factor, us_factor);
-
-    app->audio_frame_handler->is_output_audio = is_output_audio;
-
-    app->audio_processor->output_gain = audio_gain;
+    auto app = App(
+        fp_in, demod_block_size, 
+        decoder_buffer_size, ds_factor, us_factor, 
+        audio_buffer_size, Faudio);
 
     {
         const float PI = 3.1415f;
-        auto& spec = app->carrier_demod_spec;
+        auto& spec = app.qam_sync_spec;
         spec.f_sample = Fsample; 
         spec.f_symbol = Fsymbol;
         
@@ -357,30 +171,43 @@ int main(int argc, char** argv)
         spec.ted_pll_filter.butterworth_cutoff = 60e3;
         spec.ted_pll_filter.integrator_gain = 250.0f;
     }
-    {
-        auto& spec = app->qam_spec;
-        spec.buffer_size = block_size;
-        spec.scrambler_syncword = 0b1000010101011001;
-        spec.preamble_code = 0b11111001101011111100110101101101;
-        spec.crc8_polynomial = 0xD5;
-    }
 
-    const auto original_carrier_demod_spec = app->carrier_demod_spec;
-    const auto original_qam_spec = app->qam_spec;
+    app.BuildDemodulator();
+    app.GetFrameHandler().is_output_audio = is_output_audio;
 
-    app->BuildDemodulator();
+    auto demod_thread = std::thread([&app]() {
+        app.Run();
+    });
+    const auto rv = render_app(app);
+    app.Stop();
+    demod_thread.join();
+    fclose(fp_in);
 
-    // swap between live and snapshot buffer
-    auto carrier_demod_buffer = app->carrier_demod_buffer;
-    auto snapshot_buffer = app->snapshot_buffer;
-    auto render_buffer = carrier_demod_buffer;
+    return rv;
+}
 
-    // save demodulated audio
-    const int16_t audio_gain_min = 0;
-    const int16_t audio_gain_max = 32;
+// [Win32] Our example includes a copy of glfw3.lib pre-compiled with VS2010 to maximize ease of testing and compatibility with old VS compilers.
+// To link with VS2010-era libraries, VS2015+ requires linking with legacy_stdio_definitions.lib, which we do using this pragma.
+// Your own project should not be affected, as you are likely to link with a newer binary of GLFW that is adequate for your version of Visual Studio.
+#if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
+#pragma comment(lib, "legacy_stdio_definitions")
+#endif
 
-    auto demod_thread = std::thread(demodulator_thread, app);
+int is_main_window_focused = true;
 
+static void glfw_error_callback(int error, const char* description)
+{
+    LOG_MESSAGE("Glfw Error %d: %s\n", error, description);
+}
+
+// this occurs when we minimise or change focus to another window
+static void glfw_window_focus_callback(GLFWwindow* window, int focused)
+{
+    is_main_window_focused = focused;
+}
+
+
+int render_app(App& app) {
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
@@ -478,11 +305,28 @@ int main(int argc, char** argv)
         io.Fonts->AddFontFromFileTTF("res/font_awesome.ttf", 16.0f, &icons_config, icons_ranges);
     }
 
+    // swap between live and snapshot buffer
+    auto* active_buffer = &(app.GetActiveBuffer());
+    auto* snapshot_buffer = &(app.GetSnapshotBuffer());
+    auto* render_buffer = active_buffer;
+
+    // save demodulated audio
+    const int16_t audio_gain_min = 0;
+    const int16_t audio_gain_max = 32;
+
+    const auto original_qam_sync_spec = app.qam_sync_spec;
+    const int shared_block_size = render_buffer->GetInputSize();
+
+    auto get_xscale = [shared_block_size](const int N) -> double {
+        const double x = (double)shared_block_size / (double)N;
+        return x;
+    };
+
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     double x_min = 0.0f;
-    double x_max = (double)block_size * (double)ds_factor;
+    double x_max = (double)shared_block_size;
     double audio_x_min = 0.0f;
-    double audio_x_max = (double)audio_buffer_size;
+    double audio_x_max = (double)app.GetAudioProcessor().GetOutputBufferSize();
     double iq_stream_y_min = -1.25f;
     double iq_stream_y_max =  1.25f;
     double iq_stream_raw_y_min = -128.0f;
@@ -513,23 +357,8 @@ int main(int argc, char** argv)
 
         ImGui::Begin("Telemetry");
         {
-        auto dockspace_id = ImGui::GetID("Telemetry dockspace");
-        ImGui::DockSpace(dockspace_id);
-        }
-        ImGui::End();
-
-        ImGui::Begin("Audio Buffer");
-        if (ImPlot::BeginPlot("##Audio buffer")) {
-            auto buf = app->audio_processor->GetInputBuffer();
-            const auto length = app->audio_processor->GetBufferLength();
-            ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, 9, 256, ImPlotCond_Once);
-            ImPlot::PlotLine("Audio", buf, length);
-            static double y0 = 0;
-            static double y1 = 256;
-            ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
-            ImPlot::DragLineY(1, &y1, ImVec4(1,0,0,1), 1);
-            ImPlot::EndPlot();
+            auto dockspace_id = ImGui::GetID("Telemetry dockspace");
+            ImGui::DockSpace(dockspace_id);
         }
         ImGui::End();
 
@@ -537,42 +366,42 @@ int main(int argc, char** argv)
         if (ImPlot::BeginPlot("##Audio buffer")) {
             static double y0 = static_cast<double>(INT16_MAX);
             static double y1 = static_cast<double>(INT16_MIN);
-            auto buf = app->audio_processor->GetOutputBuffer();
-            const auto length = app->audio_processor->GetBufferLength();
+            auto& audio_processor = app.GetAudioProcessor();
+            auto buf = audio_processor.GetOutputBuffer();
             ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
             ImPlot::SetupAxisLimits(ImAxis_Y1, y1, y0, ImPlotCond_Once);
-            ImPlot::PlotLine("Audio", buf, length);
+            ImPlot::PlotLine("Audio", buf.data(), (int)buf.size());
             ImPlot::DragLineY(0, &y0, ImVec4(1,0,0,1), 1);
             ImPlot::DragLineY(1, &y1, ImVec4(1,0,0,1), 1);
             ImPlot::EndPlot();
         }
         ImGui::End();
 
-
         if (ImGui::Begin("Controls")) {
             const bool is_rendering_snapshot = (render_buffer == snapshot_buffer);
             if (!is_rendering_snapshot) {
                 if (ImGui::Button("Snapshot")) {
-                    app->controls.snapshot = true;
+                    app.controls.snapshot = true;
                     render_buffer = snapshot_buffer;
                 }
             } else {
                 if (ImGui::Button("Resume")) {
-                    render_buffer = carrier_demod_buffer;
+                    render_buffer = active_buffer;
                 }
             }
 
-            // ImGui::SliderFloat("Symbol frequency scaler", &demod.ted_clock.fcenter_factor, 0.0f, 2.0f);
-            // ImGui::SliderFloat("Carrier frequency offset", &demod.pll_mixer.fcenter, -10000.0f, 10000.0f);
-            auto& audio_gain = app->audio_processor->output_gain;
+            auto& audio_processor = app.GetAudioProcessor();
+            auto& frame_handler = app.GetFrameHandler();
+            auto& audio_gain = audio_processor.output_gain;
             ImGui::SliderScalar("Audio gain", ImGuiDataType_S16, &audio_gain, &audio_gain_min, &audio_gain_max);
-            ImGui::Checkbox("Output Audio", &app->audio_frame_handler->is_output_audio);
-            ImGui::Checkbox("Output Data", &app->audio_frame_handler->is_output_data);
+            ImGui::Checkbox("Output Audio", &(frame_handler.is_output_audio));
+            ImGui::Checkbox("Output Data", &(frame_handler.is_output_data));
             ImGui::End();
         }
 
         if (ImGui::Begin("Statistics")) {
-            auto& stats = app->audio_frame_handler->stats;
+            auto& frame_handler = app.GetFrameHandler();
+            auto& stats = frame_handler.stats;
             ImGui::Text("Received=%d\n", stats.total);
             ImGui::Text("Correct=%d\n", stats.correct);
             ImGui::Text("Incorrect=%d\n", stats.incorrect);
@@ -594,17 +423,19 @@ int main(int argc, char** argv)
             ImPlot::SetupAxisLimits(ImAxis_Y1, -2, 2, ImPlotCond_Once);
             const float marker_size = 3.0f;
             {
-                auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out.data());
-                auto length = render_buffer->GetTedSize();
+                const auto buf = render_buffer->y_sym_out;
+                const int N = (int)buf.size();
+                auto* data = reinterpret_cast<float*>(buf.data());
                 ImPlot::SetNextMarkerStyle(0, marker_size);
-                ImPlot::PlotScatter("IQ demod", &buffer[0], &buffer[1], length, 0, 0, 2*sizeof(float));
+                ImPlot::PlotScatter("IQ demod", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
             }
             {
-                auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out.data());
-                auto length = render_buffer->GetCarrierSize();
+                const auto buf = render_buffer->x_pll_out;
+                const int N = (int)buf.size();
+                auto* data = reinterpret_cast<float*>(buf.data());
                 ImPlot::HideNextItem(true, ImPlotCond_Once);
                 ImPlot::SetNextMarkerStyle(0, marker_size);
-                ImPlot::PlotScatter("IQ raw", &buffer[0], &buffer[1], length, 0, 0, 2*sizeof(float));
+                ImPlot::PlotScatter("IQ raw", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
             }
             ImPlot::EndPlot();
         }
@@ -612,56 +443,56 @@ int main(int argc, char** argv)
 
         ImGui::Begin("Symbol out");
         if (ImPlot::BeginPlot("Symbol out")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->y_sym_out.data());
-            auto length = render_buffer->GetTedSize();
-            float xscale = (float)ds_factor/(float)us_factor;
+            auto buf = render_buffer->y_sym_out;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("PLL out")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_pll_out.data());
-            auto length = render_buffer->GetCarrierSize();
-            float xscale = (float)ds_factor;
+            auto buf = render_buffer->x_pll_out;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("Upsampled")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_upsampled.data());
-            auto length = render_buffer->GetTedSize();
-            float xscale = (float)ds_factor/(float)us_factor;
+            auto buf = render_buffer->x_upsampled;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
-            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         ImGui::End();
 
         ImGui::Begin("Raw signals");
         if (ImPlot::BeginPlot("Raw Signal")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_in.data());
-            auto length = render_buffer->GetInputSize();
-            float xscale = 1.0f;
+            auto buf = render_buffer->x_in;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
-            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         if (ImPlot::BeginPlot("Downsampled signal")) {
-            auto buffer = reinterpret_cast<float*>(render_buffer->x_downsampled.data());
-            auto length = render_buffer->GetCarrierSize();
-            float xscale = (float)ds_factor;
+            auto buf = render_buffer->x_downsampled;
+            const int N = (int)buf.size();
+            auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
-            ImPlot::PlotLine("I", &buffer[0], length, xscale, 0.0, 0, 0, 2*sizeof(float));
-            ImPlot::PlotLine("Q", &buffer[1], length, xscale, 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
+            ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -669,10 +500,12 @@ int main(int argc, char** argv)
         ImGui::Begin("Errors");
         if (ImPlot::BeginPlot("##Errors")) {
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-            auto ds_size = render_buffer->GetCarrierSize();
-            auto us_size = render_buffer->GetTedSize();
-            ImPlot::PlotLine("PLL error", render_buffer->error_pll.data(), ds_size, (float)ds_factor);
-            ImPlot::PlotLine("TED error", render_buffer->error_ted.data(), us_size, (float)ds_factor/(float)us_factor);
+            auto buf0 = render_buffer->error_pll;
+            auto buf1 = render_buffer->error_ted;
+            const int N0 = (int)buf0.size();
+            const int N1 = (int)buf1.size();
+            ImPlot::PlotLine("PLL error", buf0.data(), N0, get_xscale(N0));
+            ImPlot::PlotLine("TED error", buf1.data(), N1, get_xscale(N1));
             ImPlot::EndPlot();
         }
         ImGui::End();
@@ -681,19 +514,23 @@ int main(int argc, char** argv)
         if (ImPlot::BeginPlot("##Triggers")) {
             ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
             ImPlot::SetupAxisLimits(ImAxis_Y1, -0.2, 1.5, ImPlotCond_Once);
-            auto ds_size = render_buffer->GetCarrierSize();
-            auto us_size = render_buffer->GetTedSize();
-            float xscale = (float)ds_factor/(float)us_factor;
-            ImPlot::PlotStems("Zero crossing", (uint8_t*)render_buffer->trig_zero_crossing.data(), us_size, 0.0f, xscale);
-            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)render_buffer->trig_ted_clock.data(), us_size, 0.0f, xscale);
-            ImPlot::PlotStems("Integrate+dump", (uint8_t*)render_buffer->trig_integrator_dump.data(), us_size, 0.0f, xscale);
+            auto buf0 = render_buffer->trig_zero_crossing;
+            auto buf1 = render_buffer->trig_ted_clock;
+            auto buf2 = render_buffer->trig_integrator_dump;
+            const int N0 = (int)buf0.size();
+            const int N1 = (int)buf1.size();
+            const int N2 = (int)buf2.size();
+
+            ImPlot::PlotStems("Zero crossing", (uint8_t*)buf0.data(), N0, 0.0f, get_xscale(N0));
+            ImPlot::PlotStems("Ramp oscillator", (uint8_t*)buf1.data(), N1, 0.0f, get_xscale(N1));
+            ImPlot::PlotStems("Integrate+dump", (uint8_t*)buf2.data(), N2, 0.0f, get_xscale(N2));
             ImPlot::EndPlot();
         }
         ImGui::End();
 
         ImGui::Begin("Spec Builder");
         {
-            auto& spec = app->carrier_demod_spec;
+            auto& spec = app.qam_sync_spec;
             const float A = 100e3;
             const float B = 10e3;
             const float C = 10e3;
@@ -711,12 +548,12 @@ int main(int argc, char** argv)
             ImGui::SliderFloat("TED PLL Filter Integrator", &spec.ted_pll_filter.integrator_gain, 0e3, C);
             
             if (ImGui::Button("Build")) {
-                app->controls.rebuild = true;
+                app.controls.rebuild = true;
             }
 
             ImGui::SameLine();
             if (ImGui::Button("Revert to default")) {
-                app->carrier_demod_spec = original_carrier_demod_spec;
+                app.qam_sync_spec = original_qam_sync_spec;
             }
         }
         ImGui::End();
@@ -755,11 +592,6 @@ int main(int argc, char** argv)
 
     glfwDestroyWindow(window);
     glfwTerminate();
-
-    // closing down
-    app->Stop();
-    demod_thread.join();
-    fclose(fp_in);
 
     return 0;
 }

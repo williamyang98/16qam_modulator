@@ -12,10 +12,10 @@
 #include <chrono>
 #include <thread>
 
-#include "demod/convolutional_encoder.h"
-#include "demod/additive_scrambler.h"
-#include "demod/crc32.h"
-#include "demod/crc8.h"
+#include "decoder/convolutional_encoder.h"
+#include "decoder/additive_scrambler.h"
+#include "decoder/crc32.h"
+#include "decoder/crc8.h"
 
 #include "utility/getopt/getopt.h"
 

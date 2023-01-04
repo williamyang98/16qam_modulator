@@ -11,7 +11,7 @@
 //           |-- PI <-- LPF <-- Phase detector <---------------------|                    
 
 // Specification for the carrier to symbol demodulator 
-struct CarrierDemodulatorSpecification 
+struct QAM_Synchroniser_Specification 
 {
     float f_sample = 1e6;
     float f_symbol = 200e3;

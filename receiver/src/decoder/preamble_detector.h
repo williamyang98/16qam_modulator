@@ -1,8 +1,10 @@
 #pragma once
 #include <complex>
+#include <vector>
+#include <memory>
 
 #include "preamble_filter.h"
-#include "constellation.h"
+#include "constellation/constellation.h"
 
 // Consists of a bank of:
 // 1. preamble filters
@@ -13,8 +15,8 @@
 // For M-QAM there are 4 possible phases: 0, PI/2, PI, -PI/2
 class PreambleDetector {
 private:
-    PreambleFilter** preamble_filters;
-    std::complex<float>* preamble_phases;
+    std::vector<std::unique_ptr<PreambleFilter>> preamble_filters;
+    std::vector<std::complex<float>> preamble_phases;
     int bits_since_preamble = 0;
     const int total_phases;
     int selected_phase = 0;
@@ -22,15 +24,9 @@ private:
     int desync_bitcount = 0;
 public:
     PreambleDetector(const int32_t _preamble, const int _total_phases);
-    ~PreambleDetector();
-    // Looks for preamble in all M phases
-    bool process(
-        const std::complex<float> IQ, 
-        ConstellationSpecification* C);
+    bool Process(const std::complex<float> IQ, ConstellationSpecification& constellation);
     bool IsPhaseConflict() { return phase_conflict; }
-    std::complex<float> GetPhase() { 
-        return preamble_phases[selected_phase];
-    }
+    std::complex<float> GetPhase() { return preamble_phases[selected_phase]; }
     int GetPhaseIndex() { return selected_phase; }
     int GetDesyncBitcount() { return desync_bitcount; }
 };

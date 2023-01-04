@@ -1,38 +1,68 @@
 #include "frame_decoder.h"
 #include <assert.h>
 
-FrameDecoder::FrameDecoder(const int _buffer_size)
-: buffer_size(_buffer_size) 
+#include "preamble_detector.h"
+#include "additive_scrambler.h"
+#include "viterbi_decoder.h"
+#include "crc8.h"
+
+FrameDecoder::FrameDecoder(
+    const int _buffer_size, 
+    ConstellationSpecification& _constellation,
+    const uint32_t preamble_word,
+    const uint16_t scrambler_syncword, 
+    const uint8_t conv_poly[2],
+    const uint8_t crc8_poly)
+: buffer_size(_buffer_size),
+  constellation(_constellation)
 {
     state = State::WAIT_BLOCK_SIZE;
 
-    descramble_buffer = new uint8_t[buffer_size];
-    encoded_buffer = new uint8_t[buffer_size];
-    decoded_buffer = new uint8_t[buffer_size];
+    constexpr int TOTAL_PHASES = 4;
+    preamble_detector = std::make_unique<PreambleDetector>(preamble_word, TOTAL_PHASES);
+    descrambler = std::make_unique<AdditiveScrambler>(scrambler_syncword);
+
+    vitdec = std::make_unique<ViterbiDecoder>(conv_poly, buffer_size*8);
+    crc8_calc = std::make_unique<CRC8_Calculator>(crc8_poly);
+
+    descramble_buffer.resize(buffer_size);
+    encoded_buffer.resize(buffer_size);
+    decoded_buffer.resize(buffer_size);
 }
 
-FrameDecoder::~FrameDecoder() {
-    delete [] descramble_buffer;
-    delete [] encoded_buffer;
-    delete [] decoded_buffer;
-}
+FrameDecoder::~FrameDecoder() = default;
 
-FrameDecoder::ProcessResult FrameDecoder::process(const uint8_t x, const int nb_bits) {
+FrameDecoder::ProcessResult FrameDecoder::process(const std::complex<float> IQ) {
+    if (state == State::WAIT_PREAMBLE) {
+        return process_await_preamble(IQ);
+    }
+
+    const auto phase_shift = preamble_detector->GetPhase();
+    const uint8_t x = constellation.GetNearestSymbol(IQ * phase_shift);
+    const int nb_bits = constellation.GetBitsPerSymbol();
+
+    auto res = ProcessResult::NONE;
     switch (state) {
-    // fall through when idle to block size processing
-    case State::IDLE:
-        {
-            reset();
-            payload.reset();
-            state = State::WAIT_BLOCK_SIZE;
-        }
     case State::WAIT_BLOCK_SIZE:
         return process_await_block_size(x, nb_bits);
+        break;
     case State::WAIT_PAYLOAD:
         return process_await_payload(x, nb_bits);
+        break;
     default:
         return ProcessResult::NONE;
     }
+}
+
+FrameDecoder::ProcessResult FrameDecoder::process_await_preamble(const std::complex<float> IQ) {
+    auto res = preamble_detector->Process(IQ, constellation);
+    if (!res) {
+        return ProcessResult::NONE;
+    }
+
+    state = State::WAIT_BLOCK_SIZE;
+    payload.reset();
+    return ProcessResult::PREAMBLE_FOUND;
 }
 
 FrameDecoder::ProcessResult FrameDecoder::process_await_block_size(const uint8_t x, const int nb_bits) {
@@ -65,8 +95,9 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_block_size(const uint8_t
     const int max_block_size = buffer_size/CODE_RATE - frame_overhead;
 
     if ((rx_block_size > max_block_size) || (rx_block_size < min_block_size)) {
+        state = State::WAIT_PREAMBLE; 
+        reset();
         payload.buf = NULL; 
-        state = State::IDLE; 
         return ProcessResult::BLOCK_SIZE_ERR;
     } else {
         payload.buf = NULL;
@@ -119,14 +150,14 @@ FrameDecoder::ProcessResult FrameDecoder::process_await_payload(const uint8_t x,
     const auto dist_err = (int)vitdec->GetPathError();
     const bool crc8_mismatch = (crc8_true != crc8_pred);
 
-    state = State::IDLE;
+    state = State::WAIT_PREAMBLE;
+    reset();
 
     payload.buf = payload_buf;
     payload.crc8_calculated = crc8_pred;
     payload.crc8_received = crc8_true;
     payload.crc8_mismatch = crc8_mismatch;
     payload.decoded_error = dist_err;
-
 
     if (crc8_mismatch) {
         return ProcessResult::PAYLOAD_ERR;

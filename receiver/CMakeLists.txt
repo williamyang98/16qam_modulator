@@ -7,6 +7,7 @@ find_package(implot REQUIRED)
 
 if(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast /arch:AVX2")
+    # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast /arch:AVX2 /fsanitize=address")
     # NOTE: If we are on a platform without AVX2
     #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fp:fast")
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
@@ -24,22 +25,37 @@ add_library(dsp_lib STATIC
 target_include_directories(dsp_lib PRIVATE ${DSP_DIR} ${SRC_DIR})
 target_compile_features(dsp_lib PRIVATE cxx_std_17)
 
-set(DEMOD_DIR ${SRC_DIR}/demod)
+set(CONSTELLATION_DIR ${SRC_DIR}/constellation)
+add_library(constellation_lib STATIC
+    ${CONSTELLATION_DIR}/constellation.cpp)
+target_include_directories(constellation_lib PRIVATE ${CONSTELLATION_DIR} ${SRC_DIR})
+target_compile_features(constellation_lib PRIVATE cxx_std_17)
+
+set(DEMOD_DIR ${SRC_DIR}/demodulator)
 add_library(demod_lib STATIC
-    ${DEMOD_DIR}/carrier_dsp_blocks.cpp
-    ${DEMOD_DIR}/carrier_dsp.cpp
-    ${DEMOD_DIR}/constellation.cpp
-    ${DEMOD_DIR}/frame_decoder.cpp
-    ${DEMOD_DIR}/preamble_detector.cpp
-    ${DEMOD_DIR}/qam_demodulator.cpp
-    ${DEMOD_DIR}/audio_processor.cpp
-    ${DEMOD_DIR}/convolutional_encoder.cpp
-    ${DEMOD_DIR}/viterbi_decoder.cpp
-    ${DEMOD_DIR}/phil_karn_viterbi_decoder.cpp
-)
-target_link_libraries(demod_lib PRIVATE dsp_lib)
+    ${DEMOD_DIR}/pll_mixer.cpp
+    ${DEMOD_DIR}/qam_sync_buffers.cpp
+    ${DEMOD_DIR}/qam_sync.cpp)
+target_link_libraries(demod_lib PRIVATE dsp_lib constellation_lib)
 target_include_directories(demod_lib PRIVATE ${DEMOD_DIR} ${SRC_DIR})
 target_compile_features(demod_lib PRIVATE cxx_std_17)
+
+set(DECODER_DIR ${SRC_DIR}/decoder)
+add_library(decoder_lib STATIC
+    ${DECODER_DIR}/convolutional_encoder.cpp
+    ${DECODER_DIR}/frame_decoder.cpp
+    ${DECODER_DIR}/phil_karn_viterbi_decoder.cpp
+    ${DECODER_DIR}/viterbi_decoder.cpp
+    ${DECODER_DIR}/preamble_detector.cpp)
+target_link_libraries(decoder_lib PRIVATE constellation_lib)
+target_include_directories(decoder_lib PRIVATE ${DECODER_DIR} ${SRC_DIR})
+target_compile_features(decoder_lib PRIVATE cxx_std_17)
+
+set(AUDIO_DIR ${SRC_DIR}/audio)
+add_library(audio_lib STATIC
+    ${AUDIO_DIR}/audio_processor.cpp)
+target_include_directories(audio_lib PRIVATE ${DECODER_DIR} ${SRC_DIR})
+target_compile_features(audio_lib PRIVATE cxx_std_17)
 
 set(GETOPT_DIR ${SRC_DIR}/utility/getopt)
 add_library(getopt STATIC ${GETOPT_DIR}/getopt.c)
@@ -47,17 +63,17 @@ target_include_directories(getopt PRIVATE getopt)
 
 add_executable(read_data ${SRC_DIR}/read_data.cpp)
 target_include_directories(read_data PRIVATE ${SRC_DIR})
-target_link_libraries(read_data PRIVATE demod_lib getopt)
+target_link_libraries(read_data PRIVATE demod_lib decoder_lib audio_lib getopt)
 target_compile_features(read_data PRIVATE cxx_std_17)
 
 add_executable(view_data ${SRC_DIR}/view_data.cpp)
 target_include_directories(view_data PRIVATE ${SRC_DIR})
-target_link_libraries(view_data PRIVATE imgui implot demod_lib getopt)
+target_link_libraries(view_data PRIVATE imgui implot demod_lib decoder_lib audio_lib getopt)
 target_compile_features(view_data PRIVATE cxx_std_17)
 
 add_executable(simulate_transmitter ${SRC_DIR}/simulate_transmitter.cpp)
 target_include_directories(simulate_transmitter PRIVATE ${SRC_DIR})
-target_link_libraries(simulate_transmitter PRIVATE demod_lib getopt)
+target_link_libraries(simulate_transmitter PRIVATE demod_lib decoder_lib getopt)
 target_compile_features(simulate_transmitter PRIVATE cxx_std_17)
 
 add_executable(replay_data ${SRC_DIR}/replay_data.cpp)
@@ -73,6 +89,8 @@ target_compile_features(pcm_play PRIVATE cxx_std_17)
 if (WIN32)
 target_compile_options(dsp_lib PRIVATE "/MP")
 target_compile_options(demod_lib PRIVATE "/MP")
+target_compile_options(decoder_lib PRIVATE "/MP")
+target_compile_options(audio_lib PRIVATE "/MP")
 target_compile_options(getopt PRIVATE "/MP")
 
 target_compile_options(read_data PRIVATE "/MP")
