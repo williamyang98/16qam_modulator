@@ -44,7 +44,6 @@ void usage() {
         "\t    rd_block_size -> block_size -> us_block_size\n"
         "\t[-i input filename (default: None)]\n"
         "\t    If no file is provided then stdin is used\n"
-        "\t[-g audio gain (default: 3)]\n"
         "\t[-A disable audio output (default: true)]\n"
         "\t[-h (show usage)]\n"
     );
@@ -60,13 +59,12 @@ int main(int argc, char** argv)
 
     char* rd_filename = NULL;
 
-    int audio_gain = 3;
     // audio stream is symbol_rate / N
     const char audio_packet_sampling_ratio = 5;
     bool is_output_audio = true;
 
     int opt; 
-    while ((opt = getopt_custom(argc, argv, "f:s:b:D:S:i:g:Ah")) != -1) {
+    while ((opt = getopt_custom(argc, argv, "f:s:b:D:S:i:Ah")) != -1) {
         switch (opt) {
         case 'f':
             Fsample = (float)(atof(optarg));
@@ -105,13 +103,6 @@ int main(int argc, char** argv)
             break;
         case 'i':
             rd_filename = optarg;
-            break;
-        case 'g':
-            audio_gain = (int)(atof(optarg));
-            if (audio_gain < 0) {
-                fprintf(stderr, "Audio gain must be positive (%d)\n", audio_gain); 
-                return 1;
-            }
             break;
         case 'A':
             is_output_audio = false;

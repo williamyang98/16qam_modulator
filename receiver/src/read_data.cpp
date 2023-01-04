@@ -182,6 +182,8 @@ int main(int argc, char **argv) {
 
     pa_output.GetMixer().GetOutputGain() = (float)audio_gain / 100.0f;
 
+    app.GetFrameHandler().is_output_audio = is_output_audio;
+
     app.GetAudioFilter().OnOutputBlock().Attach([&pcm_player, Faudio](tcb::span<const Frame<float>> data) {
         pcm_player->SetInputSampleRate((int)Faudio);
         pcm_player->ConsumeBuffer(data);
