@@ -155,11 +155,6 @@ void FrameDecoder::process_decoder_bits(const uint8_t x, const int nb_bits) {
 }
 
 void FrameDecoder::reset() {
-    // NOTE: we need to clear this since the viterbi decoder ORs in the bits
-    for (int i = 0; i < decoded_bytes; i++) {
-        decoded_buffer[i] = 0;
-    }
-
     encoded_bits = 0;
     encoded_bytes = 0;
     decoded_bytes = 0;
