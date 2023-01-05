@@ -3,6 +3,10 @@ project(imgui)
 
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/vendor/imgui)
 
+# imconfig.h is required to use 32bit vertex indices
+# this is required since implot uses alot of vertices
+configure_file(cmake/imgui_imconfig.h.in ${SRC_DIR}/imconfig.h)
+
 add_library(imgui STATIC
     "${SRC_DIR}/imgui.h"
     "${SRC_DIR}/imgui_internal.h"
@@ -39,11 +43,9 @@ find_package(OpenGL REQUIRED)
 
 if (WIN32)
 set(IMGUI_DXLIBS glfw opengl32.lib)
-endif(WIN32)
-
-if (UNIX)
-set(IMGUI_DXLIBS glfw GL)
-endif(UNIX)
+else()
+set(IMGUI_DXLIBS glfw GL dl)
+endif()
 
 # set(IMGUI_DXLIBS "d3d9.lib" "dxgi.lib" "d3dcompiler.lib")
 # set(IMGUI_DXLIBS "d3d11.lib" "dxgi.lib" "d3dcompiler.lib")
