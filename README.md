@@ -59,12 +59,9 @@ Image of 16QAM receiver software using RTLSDR dongle.
 Image of 16QAM transmitter circuit connected to Atmega328p.
 This circuit can work with the STM32F401 (even with 3.3V logic out).
 
-## Compiling Implot/Imgui notes
-To compile Imgui correctly with Implot you need to edit your imconfig.h.
-Change the ImDrawIdx to unsigned int since ImPlot will exceed the vertex count limit without this.
-```c 
-#define ImDrawIdx unsigned int
-```
+## Download sample data
+You can download sample transmitter data for the AtMega328p and STM32F401CC circuits 
+[here](https://github.com/FiendChain/16qam_modulator/releases/tag/sample_iq_data)
 
 ## TODO
 - Improve the demodulator by using better techniques
