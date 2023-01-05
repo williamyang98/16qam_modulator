@@ -1,5 +1,4 @@
 #include <stdio.h>
-
 #include <thread>
 #include <stdlib.h>
 #include <stdint.h>
@@ -27,8 +26,43 @@
 #include "imgui_config.h"
 #include "font_awesome_definitions.h"
 
-int RenderAll(App& app, PaDeviceList& device_list, PortAudio_Output& audio_output);
-void RenderApp(App& app);
+// Hold all of the data we need to render
+struct Renderer {
+    // models
+    App& app;
+    PaDeviceList& pa_device_list;
+    PortAudio_Output& pa_audio_output;
+    // control state 
+    struct AppRenderState {
+        QAM_Synchroniser_Specification original_qam_sync_spec;
+        int shared_block_size;
+        QAM_Synchroniser_Buffer* render_buffer;
+        ImPlotRange xrange_audio_buffer;
+        ImPlotRange xrange_dsp_buffers;
+        ImPlotRange yrange_input_buffer;        // baseband input
+        ImPlotRange yrange_ds_input_buffer;     // AGC normalises to -1...+1
+    } app_render_state;
+
+    Renderer(App& _app, PaDeviceList& _pa_device_list, PortAudio_Output& _pa_audio_output)
+    : app(_app), pa_device_list(_pa_device_list), pa_audio_output(_pa_audio_output)
+    {
+        {
+            auto& s = app_render_state;
+            const int shared_block_size = app.GetActiveBuffer().GetInputSize();
+            const double audio_block_size = (double)app.GetAudioFilter().GetOutputBufferSize();
+            s.original_qam_sync_spec = app.qam_sync_spec;
+            s.shared_block_size = shared_block_size;
+            s.render_buffer = &(app.GetActiveBuffer());
+            s.xrange_audio_buffer = {0, audio_block_size};
+            s.xrange_dsp_buffers = {0, (double)shared_block_size};
+            s.yrange_input_buffer = {-128, 128};
+            s.yrange_ds_input_buffer = {-1.25, 1.25};
+        }
+    }
+};
+
+int RenderAll(Renderer& renderer);
+void RenderApp(App& app, Renderer::AppRenderState& state);
 void RenderPortAudioControls(PaDeviceList& device_list, PortAudio_Output& audio_output);
 
 void usage() {
@@ -132,7 +166,7 @@ int main(int argc, char** argv)
 #endif
 
     const float Faudio = Fsymbol/(float)audio_packet_sampling_ratio;
-    const int audio_buffer_size = (int)(std::ceilf(Faudio));
+    const int audio_buffer_size = (int)Faudio;
     const int decoder_buffer_size = 1024;
 
     auto app = App(
@@ -198,7 +232,9 @@ int main(int argc, char** argv)
     auto demod_thread = std::thread([&app]() {
         app.Run();
     });
-    const auto rv = RenderAll(app, pa_devices, pa_output);
+
+    auto renderer = Renderer(app, pa_devices, pa_output);
+    const auto rv = RenderAll(renderer);
     app.Stop();
     demod_thread.join();
     fclose(fp_in);
@@ -226,7 +262,8 @@ static void glfw_window_focus_callback(GLFWwindow* window, int focused)
     is_main_window_focused = focused;
 }
 
-int RenderAll(App& app, PaDeviceList& device_list, PortAudio_Output& audio_output) {
+
+int RenderAll(Renderer& renderer) {
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
@@ -356,10 +393,10 @@ int RenderAll(App& app, PaDeviceList& device_list, PortAudio_Output& audio_outpu
         }
         ImGui::End();
 
-        RenderApp(app);
+        RenderApp(renderer.app, renderer.app_render_state);
 
         if (ImGui::Begin("Audio Controls")) {
-            RenderPortAudioControls(device_list, audio_output);
+            RenderPortAudioControls(renderer.pa_device_list, renderer.pa_audio_output);
         }
         ImGui::End();
 
@@ -401,30 +438,15 @@ int RenderAll(App& app, PaDeviceList& device_list, PortAudio_Output& audio_outpu
     return 0;
 }
 
-void RenderApp(App& app) {
+void RenderApp(App& app, Renderer::AppRenderState& state) {
     // swap between live and snapshot buffer
     auto* active_buffer = &(app.GetActiveBuffer());
     auto* snapshot_buffer = &(app.GetSnapshotBuffer());
-    auto* render_buffer = active_buffer;
 
-    // save demodulated audio
-    const auto original_qam_sync_spec = app.qam_sync_spec;
-    const int shared_block_size = render_buffer->GetInputSize();
-
-    auto get_xscale = [shared_block_size](const int N) -> double {
-        const double x = (double)shared_block_size / (double)N;
+    auto get_xscale = [&state](const int N) -> double {
+        const double x = (double)state.shared_block_size / (double)N;
         return x;
     };
-
-    double x_min = 0.0f;
-    double x_max = (double)shared_block_size;
-    double audio_x_min = 0.0f;
-    double audio_x_max = (double)app.GetAudioFilter().GetOutputBufferSize();
-    double iq_stream_y_min = -1.25f;
-    double iq_stream_y_max =  1.25f;
-    double iq_stream_raw_y_min = -128.0f;
-    double iq_stream_raw_y_max = +128.0f;
-
 
     ImGui::Begin("PCM 16Bit Buffer");
     if (ImPlot::BeginPlot("##Audio buffer")) {
@@ -433,7 +455,7 @@ void RenderApp(App& app) {
         const int N = (int)buf.size();
         auto* data = reinterpret_cast<const float*>(buf.data());
 
-        ImPlot::SetupAxisLinks(ImAxis_X1, &audio_x_min, &audio_x_max);
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_audio_buffer.Min, &state.xrange_audio_buffer.Max);
         ImPlot::SetupAxisLimits(ImAxis_Y1, -1.0f, 1.0f, ImPlotCond_Once);
         ImPlot::PlotLine("Left", &data[0], N, 1, 0, 0, 0, 2*sizeof(float));
         ImPlot::PlotLine("Right", &data[1], N, 1, 0, 0, 0, 2*sizeof(float));
@@ -442,15 +464,15 @@ void RenderApp(App& app) {
     ImGui::End();
 
     if (ImGui::Begin("Controls")) {
-        const bool is_rendering_snapshot = (render_buffer == snapshot_buffer);
+        const bool is_rendering_snapshot = (state.render_buffer == snapshot_buffer);
         if (!is_rendering_snapshot) {
             if (ImGui::Button("Snapshot")) {
                 app.controls.snapshot = true;
-                render_buffer = snapshot_buffer;
+                state.render_buffer = snapshot_buffer;
             }
         } else {
             if (ImGui::Button("Resume")) {
-                render_buffer = active_buffer;
+                state.render_buffer = active_buffer;
             }
         }
 
@@ -485,14 +507,14 @@ void RenderApp(App& app) {
         ImPlot::SetupAxisLimits(ImAxis_Y1, -2, 2, ImPlotCond_Once);
         const float marker_size = 3.0f;
         {
-            const auto buf = render_buffer->y_sym_out;
+            const auto buf = state.render_buffer->y_sym_out;
             const int N = (int)buf.size();
             auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::SetNextMarkerStyle(0, marker_size);
             ImPlot::PlotScatter("IQ demod", &data[0], &data[1], N, 0, 0, 2*sizeof(float));
         }
         {
-            const auto buf = render_buffer->x_pll_out;
+            const auto buf = state.render_buffer->x_pll_out;
             const int N = (int)buf.size();
             auto* data = reinterpret_cast<float*>(buf.data());
             ImPlot::HideNextItem(true, ImPlotCond_Once);
@@ -505,31 +527,31 @@ void RenderApp(App& app) {
 
     ImGui::Begin("Symbol out");
     if (ImPlot::BeginPlot("Symbol out")) {
-        auto buf = render_buffer->y_sym_out;
+        auto buf = state.render_buffer->y_sym_out;
         const int N = (int)buf.size();
         auto* data = reinterpret_cast<float*>(buf.data());
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &state.yrange_ds_input_buffer.Min, &state.yrange_ds_input_buffer.Max);
         ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::EndPlot();
     }
     if (ImPlot::BeginPlot("PLL out")) {
-        auto buf = render_buffer->x_pll_out;
+        auto buf = state.render_buffer->x_pll_out;
         const int N = (int)buf.size();
         auto* data = reinterpret_cast<float*>(buf.data());
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &state.yrange_ds_input_buffer.Min, &state.yrange_ds_input_buffer.Max);
         ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::EndPlot();
     }
     if (ImPlot::BeginPlot("Upsampled")) {
-        auto buf = render_buffer->x_upsampled;
+        auto buf = state.render_buffer->x_upsampled;
         const int N = (int)buf.size();
         auto* data = reinterpret_cast<float*>(buf.data());
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_y_min, &iq_stream_y_max);
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &state.yrange_ds_input_buffer.Min, &state.yrange_ds_input_buffer.Max);
         ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::EndPlot();
@@ -538,21 +560,21 @@ void RenderApp(App& app) {
 
     ImGui::Begin("Raw signals");
     if (ImPlot::BeginPlot("Raw Signal")) {
-        auto buf = render_buffer->x_in;
+        auto buf = state.render_buffer->x_in;
         const int N = (int)buf.size();
         auto* data = reinterpret_cast<float*>(buf.data());
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &state.yrange_input_buffer.Min, &state.yrange_input_buffer.Max);
         ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::EndPlot();
     }
     if (ImPlot::BeginPlot("Downsampled signal")) {
-        auto buf = render_buffer->x_downsampled;
+        auto buf = state.render_buffer->x_downsampled;
         const int N = (int)buf.size();
         auto* data = reinterpret_cast<float*>(buf.data());
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        ImPlot::SetupAxisLinks(ImAxis_Y1, &iq_stream_raw_y_min, &iq_stream_raw_y_max);
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
+        ImPlot::SetupAxisLinks(ImAxis_Y1, &state.yrange_input_buffer.Min, &state.yrange_input_buffer.Max);
         ImPlot::PlotLine("I", &data[0], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::PlotLine("Q", &data[1], N, get_xscale(N), 0.0, 0, 0, 2*sizeof(float));
         ImPlot::EndPlot();
@@ -561,11 +583,11 @@ void RenderApp(App& app) {
 
     ImGui::Begin("Errors");
     if (ImPlot::BeginPlot("##Errors")) {
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        auto buf0 = render_buffer->error_pll;
-        auto buf1 = render_buffer->error_ted;
+        auto buf0 = state.render_buffer->error_pll;
+        auto buf1 = state.render_buffer->error_ted;
         const int N0 = (int)buf0.size();
         const int N1 = (int)buf1.size();
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
         ImPlot::PlotLine("PLL error", buf0.data(), N0, get_xscale(N0));
         ImPlot::PlotLine("TED error", buf1.data(), N1, get_xscale(N1));
         ImPlot::EndPlot();
@@ -574,15 +596,14 @@ void RenderApp(App& app) {
 
     ImGui::Begin("Triggers");
     if (ImPlot::BeginPlot("##Triggers")) {
-        ImPlot::SetupAxisLinks(ImAxis_X1, &x_min, &x_max);
-        ImPlot::SetupAxisLimits(ImAxis_Y1, -0.2, 1.5, ImPlotCond_Once);
-        auto buf0 = render_buffer->trig_zero_crossing;
-        auto buf1 = render_buffer->trig_ted_clock;
-        auto buf2 = render_buffer->trig_integrator_dump;
+        auto buf0 = state.render_buffer->trig_zero_crossing;
+        auto buf1 = state.render_buffer->trig_ted_clock;
+        auto buf2 = state.render_buffer->trig_integrator_dump;
         const int N0 = (int)buf0.size();
         const int N1 = (int)buf1.size();
         const int N2 = (int)buf2.size();
-
+        ImPlot::SetupAxisLinks(ImAxis_X1, &state.xrange_dsp_buffers.Min, &state.xrange_dsp_buffers.Max);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, -0.2, 1.5, ImPlotCond_Once);
         ImPlot::PlotStems("Zero crossing", (uint8_t*)buf0.data(), N0, 0.0f, get_xscale(N0));
         ImPlot::PlotStems("Ramp oscillator", (uint8_t*)buf1.data(), N1, 0.0f, get_xscale(N1));
         ImPlot::PlotStems("Integrate+dump", (uint8_t*)buf2.data(), N2, 0.0f, get_xscale(N2));
@@ -615,7 +636,7 @@ void RenderApp(App& app) {
 
         ImGui::SameLine();
         if (ImGui::Button("Revert to default")) {
-            app.qam_sync_spec = original_qam_sync_spec;
+            app.qam_sync_spec = state.original_qam_sync_spec;
         }
     }
     ImGui::End();

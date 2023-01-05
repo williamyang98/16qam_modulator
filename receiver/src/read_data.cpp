@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
 #endif
 
     const float Faudio = Fsymbol/(float)audio_packet_sampling_ratio;
-    const int audio_buffer_size = (int)std::ceil(Faudio);
+    const int audio_buffer_size = (int)Faudio;
     const int decoder_block_size = 1024;
 
     auto app = App(
