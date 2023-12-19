@@ -1,10 +1,5 @@
-## Introduction
+# Introduction
 This is 16QAM transmitter code for the STM32F401CCU6.
-
-Uses the following software/tools:
-- CubeMX: For configuring the GPIO, peripherals and timers
-- CubeIDE: For compiling and editing the code
-- CubeProgrammer: For uploading the binary file to the STM32 via USART/ST-Link/USB
 
 ## Pin layout
 | Pin | Description |
@@ -62,3 +57,56 @@ For some reason the STM32F401CCU6 development board (black pill) doesn't include
 - Timer 3 is used to clock the ADC regular conversion meaning it directly triggers the ADC DMA interrupt.
 - Timer 1 has it's update event interrupt enabled so that it's ISR can be used to transmit the 4bit 16-QAM symbols.
 - Timer 1 is given a higher priority (lower value) than the ADC DMA interrupt so the symbol frequency is constant without interruptions by ADC sampling.
+
+# Development environment setup
+Uses the following software/tools:
+- CubeMX: For configuring the GPIO, peripherals and timers
+- CubeIDE: For compiling and editing the code
+- CubeProgrammer: For uploading the binary file to the STM32 via USART/ST-Link/USB
+
+All of these were downloaded from the STM32 website, which requires a developer account. For archival purposes the installers can be downloaded from the following [MegaNZ link](https://mega.nz/folder/JVpiXQaL#3XEjQmK5Fs9hsVNtCRJdhA).
+
+## Setting up CubeMX and CubeIDE
+1. Run the installers for CubeMX and CubeIDE.
+2. (Optional) Disable telemetry collection by reading install instructions.
+3. Setup project for CubeIDE by opening application and going to ```File > Open projects from file system > Import source (Directory)```.
+4. Set build type to Release by going to ```Project > Build configurations > Set active > Release```.
+5. Build binary by going to ```Project > Build project```.
+6. Binary should now be in ```Release``` or ```Debug``` folder as a ```.bin``` file.
+
+## Setting up CubeProgrammer
+1. Install the STM32CubeProgrammer from installer.
+2. The USB drivers should be installed for the STLink device. If you have problems later on go to device manager and make the STLink device use the "STMicroelectronics STLink dongle Version: x.x.x" from manual driver list.
+3. Open STM32CubeProgrammer and use the following configuration settings.
+
+### Updating STLink firmware
+1. Click on the ```Firmware upgrade``` button.
+2. Wait for the ```STLinkUpgrade``` dialog window to open.
+3. Reconnect the STLink while the dialog is open.
+4. Click on ```Open in update mode``` until device information shows up in ```Current Firmware``` and ```ST-Link ID``` fields. (May require a few clicks).
+5. Click ```Upgrade``` to upgrade the firmware.
+6. Wait for firmware upgrade to be confirmed.
+7. Close dialog window.
+8. Reconnect the STLink device.
+
+### Uploading binary to STM32Fxxx
+The ST-Link configuration is as follows:
+
+| Field | Value |
+| --- | --- |
+| Serial Number | ... |
+| Port | SWD |
+| Frequency (kHz) | 4000 |
+| Mode | Normal |
+| Access port | 0 |
+| Reset mode | Software Reset |
+| Speed | Reliable |
+| Shared | **Enabled** |
+| Debug in Low Power mode | True |
+
+1. Set the above configuration for STLink uploader. (STLinkV2 was used).
+2. Press connect button and wait for green "Connected" status.
+3. Select the "Download" icon button from the left vertical navigation buttons.
+4. Under ```Download > File path``` select the ```.bin``` file compiled by CubeIDE.
+5. Check ```Verify programming``` and ```Run after programming``` checkboxes.
+6. Click ```Start Programming``` button and wait for upload to finish and be confirmed.
