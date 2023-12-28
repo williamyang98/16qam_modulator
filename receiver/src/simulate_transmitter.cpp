@@ -11,6 +11,7 @@
 #include <cmath>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include "decoder/convolutional_encoder.h"
 #include "decoder/additive_scrambler.h"
@@ -18,6 +19,7 @@
 #include "decoder/crc8.h"
 
 #include "utility/getopt/getopt.h"
+#include "utility/span.h"
 
 #include <io.h>
 #include <fcntl.h>
@@ -65,10 +67,21 @@ void usage() {
     );
 }
 
-int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny);
-int create_test_data(uint8_t** x);
-int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms);
-int create_4QAM_symbols(uint8_t x, IQ_Symbol* syms);
+void create_frame(tcb::span<const uint8_t> input_data, tcb::span<uint8_t> output_data);
+std::vector<uint8_t> create_test_data();
+std::vector<uint8_t> create_audio_data();
+int create_16QAM_symbols(uint8_t x, tcb::span<IQ_Symbol> syms);
+int create_4QAM_symbols(uint8_t x, tcb::span<IQ_Symbol> syms);
+
+template <typename T>
+void extend_vector(std::vector<T>& dst, std::vector<T>&& src) {
+    const size_t final_size = dst.size() + src.size();
+    const size_t old_size = dst.size();
+    dst.resize(final_size);
+
+    auto write_buffer = tcb::span(dst).last(src.size());
+    std::copy_n(src.begin(), src.size(), write_buffer.begin());
+}
 
 int main(int argc, char** argv) {
     // check if argument was passed in to dump a byte stream
@@ -127,21 +140,20 @@ int main(int argc, char** argv) {
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
     _setmode(_fileno(stdout), _O_BINARY);
-
-    uint8_t* test_data = NULL;
-    int total_encoded = create_test_data(&test_data);
-    fprintf(stderr, "Generated %dB\n", total_encoded);
+    
+    auto test_data = std::vector<uint8_t>();
+    extend_vector(test_data, create_test_data());
+    extend_vector(test_data, create_audio_data());
+    fprintf(stderr, "Generated %zu bytes\n", test_data.size());
 
     if (is_dumping) {
         printf("{");
-        for (int i = 0; i < total_encoded; i++) {
+        for (int i = 0; i < test_data.size(); i++) {
             printf("0x%02X,", test_data[i]);
         }
         printf("};\n");
-        delete [] test_data;
         return 0;
     }
-
 
     const float F_block = Fs/(float)(block_size);
     const float T_block = 1.0f/F_block;
@@ -151,16 +163,14 @@ int main(int argc, char** argv) {
     // number of samples per symbol
     const int Nsamples = (int)std::round(Fs/Fsym);
     const int T_block_microseconds = static_cast<int>(std::ceil(T_block * 1e6));
-
-    uint8_t* tx_block = new uint8_t[block_size*2];
+    
+    auto tx_block = std::vector<uint8_t>(block_size*2);
     int curr_tx_block_idx = 0;
-
     IQ_Symbol sym_out[8];
-
     // convert to symbols
     auto dt_prev_tx = std::chrono::high_resolution_clock::now();
     while (1) {
-        for (int i = 0; i < total_encoded; i++) {
+        for (int i = 0; i < test_data.size(); i++) {
             const auto x = test_data[i];
             int total_symbols = 0;
             switch (modulation_type) {
@@ -182,10 +192,10 @@ int main(int argc, char** argv) {
                     curr_tx_block_idx += 2;
 
                     // transmit the block
-                    if (curr_tx_block_idx >= (block_size*2)) {
-                        const size_t nb_write = fwrite(tx_block, sizeof(IQ_Symbol), block_size, stdout);
-                        if (nb_write != block_size) {
-                            fprintf(stderr, "Failed to write symbol %zu/%zu\n", nb_write, (size_t)block_size);
+                    if (curr_tx_block_idx >= tx_block.size()) {
+                        const size_t nb_write = fwrite(tx_block.data(), sizeof(uint8_t), tx_block.size(), stdout);
+                        if (nb_write != tx_block.size()) {
+                            fprintf(stderr, "Failed to write symbol %zu/%zu\n", nb_write, tx_block.size());
                             return 0;
                         }
                         curr_tx_block_idx = 0;
@@ -210,14 +220,10 @@ int main(int argc, char** argv) {
             }
         }
     }
-
-    delete [] tx_block;
-    delete [] test_data;
-
     return 0;
 }
 
-int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms) {
+int create_16QAM_symbols(uint8_t x, tcb::span<IQ_Symbol> syms) {
     static const uint8_t _gray_code[4] = {0b00, 0b01, 0b11, 0b10};
 
     uint8_t I1 = (x & 0b11000000) >> 6;
@@ -249,7 +255,7 @@ int create_16QAM_symbols(uint8_t x, IQ_Symbol* syms) {
     return 2;
 }
 
-int create_4QAM_symbols(uint8_t x, IQ_Symbol* syms) {
+int create_4QAM_symbols(uint8_t x, tcb::span<IQ_Symbol> syms) {
     // NOTE: 4QAM is already gray code by itself
     const uint8_t A = 64;
     const uint8_t B = 128;
@@ -273,7 +279,7 @@ int create_4QAM_symbols(uint8_t x, IQ_Symbol* syms) {
     return 4;
 }
 
-int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
+void create_frame(tcb::span<const uint8_t> input_data, tcb::span<uint8_t> output_data) {
     // encoding size is given as the following
     // 4: preamble
     // additive scrambler + fec of 1/2 K=3 [7,5] code
@@ -284,6 +290,13 @@ int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
 
     // T = 4 + 2*(2+N+1+1)
     // T = 2N + 12
+    const size_t expected_output_size = 2*input_data.size() + 12;
+    assert(expected_output_size == output_data.size());
+
+    const size_t Nx = input_data.size();
+    const size_t Ny = output_data.size();
+    auto x = input_data;
+    auto y = output_data;
 
     int offset = 0;
     offset += push_big_endian_byte(&y[offset], PREAMBLE_CODE);
@@ -305,7 +318,7 @@ int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
         offset += push_big_endian_byte(&y[offset], enc_out);
     }
 
-    uint8_t crc8 = crc8_calc.process(x, Nx);
+    uint8_t crc8 = crc8_calc.process(x.data(), int(x.size()));
     auto crc8_addr = reinterpret_cast<uint8_t*>(&crc8);
     for (int i = 0; i < sizeof(crc8); i++) {
         auto enc_out = enc.consume_byte(crc8_addr[i]);
@@ -321,35 +334,16 @@ int create_frame(uint8_t* x, const int Nx, uint8_t* y, const int Ny) {
     for (int i = scrambler_offset; i < offset; i++) {
         y[i] = scrambler.process(y[i]);
     }
-
-
-    return offset;
 }
 
-int create_test_data(uint8_t** x) {
-    uint8_t data1[] = "Test string 1";
-    const int data1_size = sizeof(data1) / sizeof(uint8_t);
-
-    uint8_t data2[] = "Test string 2";
-    const int data2_size = sizeof(data2) / sizeof(uint8_t);
-
-    uint8_t data3[] = "Trust in the LORD with all your heart, and do not lean on your own understanding. In all your ways acknowledge Him, and He will make straight your paths. May the God of hope fill you with all joy and peace as you trust in Him, so that you may overflow with hope by the power of the Holy Spirit.";
-    const int data3_size = sizeof(data3) / sizeof(uint8_t);
-
-    uint8_t data4[] = "Test string 4";
-    const int data4_size = sizeof(data4) / sizeof(uint8_t);
-
-    int total_data = 0;
-    total_data += data1_size;
-    total_data += data2_size;
-    total_data += data3_size;
-    total_data += data4_size;
-
-    int total_encoded = 0;
-    total_encoded += (2*data1_size + 12);
-    total_encoded += (2*data2_size + 12);
-    total_encoded += (2*data3_size + 12);
-    total_encoded += (2*data4_size + 12);
+std::vector<uint8_t> create_test_data() {
+    constexpr size_t TOTAL_STRINGS = 4;
+    const char* data[TOTAL_STRINGS] = {
+        "Test string 1",
+        "Test string 2",
+        "Trust in the LORD with all your heart, and do not lean on your own understanding. In all your ways acknowledge Him, and He will make straight your paths. May the God of hope fill you with all joy and peace as you trust in Him, so that you may overflow with hope by the power of the Holy Spirit.",
+        "Test string 4",
+    };
 
     // encoding size is given as the following
     // 4: preamble
@@ -362,14 +356,53 @@ int create_test_data(uint8_t** x) {
     // T = 4 + 2*(2+N+1)
     // T = 2N + 12
 
-    uint8_t* frame = new uint8_t[total_encoded];
+    size_t string_lengths[TOTAL_STRINGS] = {0};
+    size_t encoded_lengths[TOTAL_STRINGS] = {0};
+    size_t total_encoded_length = 0;
+    for (size_t i = 0; i < TOTAL_STRINGS; i++) {
+        const char* input_data = data[i];
+        const size_t input_length = strlen(input_data);
+        const size_t encoded_length = 2*input_length + 12;
 
-    int total_written = 0;
-    total_written += create_frame(data4, data4_size, &frame[total_written], total_encoded-total_written);
-    total_written += create_frame(data3, data3_size, &frame[total_written], total_encoded-total_written);
-    total_written += create_frame(data2, data2_size, &frame[total_written], total_encoded-total_written);
-    total_written += create_frame(data1, data1_size, &frame[total_written], total_encoded-total_written);
+        string_lengths[i] = input_length;
+        encoded_lengths[i] = encoded_length;
+        total_encoded_length += encoded_length;
+    }
 
-    *x = frame;
-    return total_encoded;
+    auto frame = std::vector<uint8_t>(total_encoded_length);
+    auto write_buffer = tcb::span(frame);
+    for (size_t i = 0; i < TOTAL_STRINGS; i++) {
+        const auto input_data = tcb::span(reinterpret_cast<const uint8_t*>(data[i]), string_lengths[i]);
+        const size_t encoded_length = encoded_lengths[i];
+        create_frame(input_data, write_buffer.first(encoded_length));
+        write_buffer = write_buffer.subspan(encoded_length);
+    }
+
+    return frame;
+}
+
+std::vector<uint8_t> create_audio_data() {
+    // NOTE: prototype has this value set to 100 to delineate audio packets which is an ugly hack!!!
+    const size_t AUDIO_PACKET_BLOCK_SIZE = 100;
+    const size_t total_encoded_per_block = 2*AUDIO_PACKET_BLOCK_SIZE + 12;
+    const size_t total_audio_blocks = 1000;
+    const size_t total_encoded = total_encoded_per_block * total_audio_blocks;
+    
+    auto block = std::vector<uint8_t>(AUDIO_PACKET_BLOCK_SIZE);
+    auto output_frame = std::vector<uint8_t>(total_encoded);
+    auto write_buffer = tcb::span(output_frame); 
+    float dt = 0.0f;
+    for (size_t curr_block = 0; curr_block < total_audio_blocks; curr_block++) {
+        // generate sine wave
+        for (size_t i = 0; i < AUDIO_PACKET_BLOCK_SIZE; i++) {
+            const uint8_t sample = uint8_t(std::sin(dt)*126.0 + 127.0);
+            block[i] = sample;
+            dt += 0.1f;
+        }
+        // encode block
+        create_frame(block, write_buffer.first(total_encoded_per_block));
+        write_buffer = write_buffer.subspan(total_encoded_per_block);
+    }
+
+    return output_frame;
 }

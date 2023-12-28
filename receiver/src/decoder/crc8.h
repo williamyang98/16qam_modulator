@@ -10,7 +10,7 @@ public:
     CRC8_Calculator(uint8_t _G): G(_G) {
         generate_table();
     }
-    uint8_t process(uint8_t* x, const int N) {
+    uint8_t process(const uint8_t* x, const int N) {
         uint8_t crc8 = 0;
 
         for (int i = 0; i < N; i++) {
