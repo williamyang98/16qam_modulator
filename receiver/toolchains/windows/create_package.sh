@@ -1,6 +1,6 @@
 #!/bin/bash
 output_dir="16qam_receiver_windows_x64"
-build_dir="build-windows/examples"
+build_dir="build-windows"
 
 # clean directory
 rm -rf ${output_dir}
