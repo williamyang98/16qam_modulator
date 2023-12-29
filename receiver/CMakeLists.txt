@@ -19,15 +19,33 @@ endif()
 # MSVC = vcpkg package manager
 # MSYS2 + Ubuntu = package manager
 if(WIN32)
+    set(rtlsdr_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/librtlsdr)
+    find_package(rtlsdr CONFIG REQUIRED)
     find_package(portaudio CONFIG REQUIRED)
+    set(RTLSDR_LIBS rtlsdr::rtlsdr)
     set(PORTAUDIO_LIBS portaudio)
     set(EXTRA_LIBS "")
 else()
     find_package(PkgConfig REQUIRED)
+    pkg_check_modules(rtlsdr REQUIRED IMPORTED_TARGET librtlsdr)
     pkg_check_modules(portaudio REQUIRED IMPORTED_TARGET portaudio-2.0)
+    set(RTLSDR_LIBS PkgConfig::rtlsdr)
     set(PORTAUDIO_LIBS PkgConfig::portaudio)
     set(EXTRA_LIBS pthread)
 endif()
+
+function(install_dlls target)
+    if(DEFINED WIN32)
+        add_custom_command(
+            TARGET ${target}
+            POST_BUILD 
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${target}> 
+            $<TARGET_FILE_DIR:${target}>
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
+endfunction()
 
 set(SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
@@ -103,3 +121,9 @@ add_executable(replay_data ${SRC_DIR}/replay_data.cpp)
 target_include_directories(replay_data PRIVATE ${SRC_DIR})
 target_link_libraries(replay_data PRIVATE getopt)
 target_compile_features(replay_data PRIVATE cxx_std_17)
+
+add_executable(rtl_sdr ${SRC_DIR}/rtl_sdr.cpp)
+target_include_directories(rtl_sdr PRIVATE ${SRC_DIR})
+target_link_libraries(rtl_sdr PRIVATE ${RTLSDR_LIBS} getopt)
+target_compile_features(rtl_sdr PRIVATE cxx_std_17)
+install_dlls(rtl_sdr)

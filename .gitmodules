@@ -4,3 +4,6 @@
 [submodule "receiver/vendor/imgui"]
 	path = receiver/vendor/imgui
 	url = https://github.com/ocornut/imgui.git
+[submodule "receiver/vendor/librtlsdr"]
+	path = receiver/vendor/librtlsdr
+	url = https://github.com/FiendChain/librtlsdr_cmake.git
