@@ -1,4 +1,6 @@
-/build
+build/
+build-*/
+build_*/
 /data
 *.pdb
 imgui.ini

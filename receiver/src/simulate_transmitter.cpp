@@ -12,6 +12,8 @@
 #include <chrono>
 #include <thread>
 #include <vector>
+#include <cstring>
+#include <algorithm>
 
 #include "decoder/convolutional_encoder.h"
 #include "decoder/additive_scrambler.h"
@@ -21,8 +23,10 @@
 #include "utility/getopt/getopt.h"
 #include "utility/span.h"
 
+#if _WIN32
 #include <io.h>
 #include <fcntl.h>
+#endif
 
 struct IQ_Symbol {
     uint8_t I;
@@ -136,10 +140,12 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
-
+    
+#if _WIN32
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
     _setmode(_fileno(stdout), _O_BINARY);
+#endif
     
     auto test_data = std::vector<uint8_t>();
     extend_vector(test_data, create_test_data());

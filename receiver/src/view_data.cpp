@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#if defined(_WIN32)
+#if _WIN32
 #include <io.h>
 #include <fcntl.h>
 #endif
@@ -18,7 +18,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-#if defined(IMGUI_IMPL_OPENGL_ES2)
+#if IMGUI_IMPL_OPENGL_ES2
 #include <GLES2/gl2.h>
 #endif
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
@@ -151,14 +151,14 @@ int main(int argc, char** argv)
     // app startup
     FILE* fp_in = stdin;
     if (rd_filename != NULL) {
-        errno_t err = fopen_s(&fp_in, rd_filename, "r");
-        if (err != 0) {
+        fp_in = fopen(rd_filename, "rb");
+        if (fp_in == nullptr) {
             LOG_MESSAGE("Failed to open file for reading\n");
             return 1;
         }
     }
 
-#if defined(_WIN32)
+#if _WIN32
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
     _setmode(_fileno(fp_in), _O_BINARY);

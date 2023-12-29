@@ -8,8 +8,10 @@
 
 #include "utility/getopt/getopt.h"
 
+#if _WIN32
 #include <io.h>
 #include <fcntl.h>
+#endif
 
 void usage() {
     fprintf(stderr, 
@@ -53,17 +55,19 @@ int main(int argc, char** argv) {
 
     FILE* fp = stdin;
     if (filename != NULL) {
-        errno_t err = fopen_s(&fp, filename, "r");
-        if (err != 0) {
+        fp = fopen(filename, "rb");
+        if (fp == nullptr) {
             fprintf(stderr, "Failed to open file: %s\n", filename);
             return 1;
         }
     }
 
+#if _WIN32
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(fp), _O_BINARY);
+#endif
 
     if (block_size <= 0) {
         fprintf(stderr, "Block size (%d) cannot be negative\n", block_size);

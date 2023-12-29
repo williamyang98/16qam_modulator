@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <assert.h>
 
-#if defined(_WIN32)
+#if _WIN32
 #include <io.h>
 #include <fcntl.h>
 #endif
@@ -110,14 +110,14 @@ int main(int argc, char **argv) {
 
     FILE* fp_in = stdin;
     if (filename != NULL) {
-        errno_t err = fopen_s(&fp_in, filename, "r");
-        if (err != 0) {
+        fp_in = fopen(filename, "rb");
+        if (fp_in == nullptr) {
             fprintf(stderr, "Failed to open file: %s\n", filename);
             return 1;
         }
     }
 
-#if defined(_WIN32)
+#if _WIN32
     // NOTE: Windows does extra translation stuff that messes up the file if this isn't done
     // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/setmode?view=msvc-170
     _setmode(_fileno(fp_in), _O_BINARY);

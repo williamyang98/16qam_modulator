@@ -24,7 +24,7 @@ QAM_Synchroniser::QAM_Synchroniser(
     const float Fdownsample = Fsource/(float)(spec.downsampling_filter.M);
     const float Fupsample = Fdownsample * (float)(spec.upsampling_filter.L);
 
-    Nsymbol = (int)std::floorf(Fupsample/Fsymbol);
+    Nsymbol = int(std::floor(Fupsample/Fsymbol));
 
     const float Tsource = 1.0f/Fsource;
     const float Tdownsample = 1.0f/Fdownsample;
@@ -116,7 +116,7 @@ QAM_Synchroniser::QAM_Synchroniser(
 
     I_zcd = std::make_unique<N_Level_Crossing_Detector>(N_levels, total_levels);
     Q_zcd = std::make_unique<N_Level_Crossing_Detector>(N_levels, total_levels);
-    zcd_cooldown.N_cooldown = (int)std::floorf(Nsymbol*0.0f);
+    zcd_cooldown.N_cooldown = int(std::floor(Nsymbol*0.0f));
 }
 
 int QAM_Synchroniser::ProcessBlock(QAM_Synchroniser_Buffer& buffers)

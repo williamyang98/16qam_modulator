@@ -1,5 +1,5 @@
 #include "qam_sync_buffers.h"
-#include <cstdlib>
+#include <cstring>
 
 QAM_Synchroniser_Buffer::QAM_Synchroniser_Buffer(const int _block_size, const int M, const int L) 
 :   src_block_size(_block_size*M), 
