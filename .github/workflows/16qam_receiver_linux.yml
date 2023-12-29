@@ -1,0 +1,51 @@
+name: 16qam_receiver_linux
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "master", "dev" ]
+
+jobs:
+  skip_check:
+    continue-on-error: false
+    runs-on: ubuntu-22.04
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+    - id: skip_check
+      uses: fkirc/skip-duplicate-actions@v5
+      with:
+        concurrent_skipping: 'same_content'
+        cancel_others: 'true'
+        skip_after_successful_duplicate: 'true'
+        paths_ignore: '["**/README.md", "**/docs/**", "**/LICENSE", "circuit/*", "receiver/vcpkg.json", "receiver/toolchains/windows/*" ]'
+        do_not_skip: '["workflow_dispatch", "schedule"]'
+
+  build:
+    needs: skip_check
+    if: needs.skip_check.outputs.should_skip != 'true'
+
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v3
+      with: 
+        submodules: recursive 
+      
+    - name: Install packages
+      shell: bash
+      run: cd ./receiver && ./toolchains/ubuntu/install_packages.sh
+    
+    - name: Configure CMake
+      shell: bash
+      run: cd ./receiver && ./toolchains/ubuntu/cmake_configure.sh
+
+    - name: Build
+      shell: bash
+      run: cd ./receiver && ninja -C build-ubuntu
+    
+    - name: Upload files (Release) 
+      uses: actions/upload-artifact@v3
+      with:
+        name: 16qam_receiver_linux_x64
+        path: ${{github.workspace}}/receiver/build-ubuntu

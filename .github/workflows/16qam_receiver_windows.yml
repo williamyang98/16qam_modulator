@@ -1,0 +1,61 @@
+name: 16qam_receiver_windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "master", "dev" ]
+
+jobs:
+  skip_check:
+    continue-on-error: false
+    runs-on: ubuntu-22.04
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+    - id: skip_check
+      uses: fkirc/skip-duplicate-actions@v5
+      with:
+        concurrent_skipping: 'same_content'
+        cancel_others: 'true'
+        skip_after_successful_duplicate: 'true'
+        paths_ignore: '["**/README.md", "**/docs/**", "**/LICENSE", "receiver/toolchains/ubuntu/*" ]'
+        do_not_skip: '["workflow_dispatch", "schedule"]'
+
+  build:
+    needs: skip_check
+    if: needs.skip_check.outputs.should_skip != 'true'
+
+    runs-on: windows-2022
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Setup vcpkg with caching
+      uses: friendlyanon/setup-vcpkg@v1
+      with: 
+        committish: c9f906558f9bb12ee9811d6edc98ec9255c6cda5
+        path: vcpkg
+
+    - name: Configure CMake
+      shell: bash
+      run: cd ./receiver && VCPKG_ROOT=./vcpkg ./toolchains/windows/cmake_configure.sh
+
+    - name: Build
+      shell: bash
+      run: cd ./receiver && ninja -C build-windows
+
+    - name: Copy files 
+      shell: bash
+      run: cd ./receiver && ./toolchains/windows/create_package.sh
+
+    - name: Upload files 
+      uses: actions/upload-artifact@v3
+      with:
+        name: 16qam_receiver_windows_x64
+        path: ${{github.workspace}}/receiver/16qam_receiver_windows_x64

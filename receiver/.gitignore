@@ -5,4 +5,5 @@ build_*/
 *.pdb
 imgui.ini
 .vscode/
-log.txt
+log.tx
+16qam_receiver_*/

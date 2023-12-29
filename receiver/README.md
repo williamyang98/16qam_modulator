@@ -1,26 +1,34 @@
-## Instructions
-We are using pipes to direct data between applications. 
+# Introduction
+[![windows-build](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_windows.yml/badge.svg)](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_windows.yml)
+[![linux-build](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_linux.yml/badge.svg)](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_linux.yml)
 
-Application | Description
+Software radio receiver for 16QAM modulator.
+
+## Applications
+For a sampling rate ```F``` and symbol rate ```S```.
+
+| Command | Description |
 | --- | --- |
-get_live_data.sh    | Print raw IQ bytes from rtlsdr dongle
-build/*/read_data   | Demodulates raw IQ bytes to 16bit PCM audio
-build/*/view_data   | Same as read_data except it has a GUI to view telemetry
-build/*/pcm_play    | Reads 16bit PCM values and plays them as sound
-build/*/simulate_transmitter | Print raw IQ bytes containing modulated data
-aplay_port.sh       | Uses VLC to play raw PCM data
-get_test_sample.sh  | Save raw IQ bytes from rtlsdr dongle to PCM file 
-fx.bat              | Helper script for building with MSVC on Windows 
+| ```rtl_sdr -f $F -s $S -b $BLOCK_SIZE -E direct2``` | Reads IQ samples from receiver using direct sampling |
+| ```read_data -f $F -s $S``` | Demodulates samples from stdin or a file and plays back audio |
+| ```view_data -f $F -s $S``` | Same as read_data except there is a GUI for adjusting settings and visualising data |
+| ```simulate_transmitter -f $F -s $S``` | Generates IQ samples locally |
+| ```replay_data -f $F``` | Replays IQ data in realtime |
 
-## Usage
-#### 1. To play audio without GUI
+## Usage scenarios
+| Scenario | Command |
+| --- | --- |
+| Demodulate data from receiver | ```rtl_sdr -f $F -s $S -b $BLOCK_SIZE -E direct2 \| view_data -f $F -S $S``` |
+| Demodulate data from simulator | ```simulate_transmitter -f $F -s $S \| view_data -f $F -S $S``` |
 
-<code>./get_live_data.sh | build/Release/read_data.exe | build/Release/pcm_play.exe</code>
+## Build
+### Windows
+1. Install Visual Studio C++ and setup development environment.
+2. Install vcpkg.
+3. ```./toolchains/windows/cmake_configure.sh```.
+4. ```ninja -C build-windows```.
 
-#### 2. To play audio with telemetry GUI
-
-<code>./get_live_data.sh | build/Release/view_data.exe | build/Release/pcm_play.exe</code>
-
-#### 3. To build the project
-
-<code>fx build release build/*project_name*.vcprojx</code>
+### Ubuntu
+1. ```./toolchains/ubuntu/install_packages.sh```.
+2. ```./toolchains/ubuntu/cmake_configure.sh```.
+3. ```ninja -C build-ubuntu```.
