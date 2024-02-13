@@ -6,4 +6,4 @@
 	url = https://github.com/ocornut/imgui.git
 [submodule "receiver/vendor/librtlsdr"]
 	path = receiver/vendor/librtlsdr
-	url = https://github.com/FiendChain/librtlsdr_cmake.git
+	url = https://github.com/williamyang98/librtlsdr_cmake.git

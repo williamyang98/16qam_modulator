@@ -1,6 +1,6 @@
 # Introduction
-[![windows-build](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_windows.yml/badge.svg)](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_windows.yml)
-[![linux-build](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_linux.yml/badge.svg)](https://github.com/FiendChain/16qam_modulator/actions/workflows/16qam_receiver_linux.yml)
+[![windows-build](https://github.com/williamyang98/16qam_modulator/actions/workflows/16qam_receiver_windows.yml/badge.svg)](https://github.com/williamyang98/16qam_modulator/actions/workflows/16qam_receiver_windows.yml)
+[![linux-build](https://github.com/williamyang98/16qam_modulator/actions/workflows/16qam_receiver_linux.yml/badge.svg)](https://github.com/williamyang98/16qam_modulator/actions/workflows/16qam_receiver_linux.yml)
 
 Software radio receiver for 16QAM modulator.
 

@@ -61,7 +61,7 @@ This circuit can work with the STM32F401 (even with 3.3V logic out).
 
 ## Download sample data
 You can download sample transmitter data for the AtMega328p and STM32F401CC circuits 
-[here](https://github.com/FiendChain/16qam_modulator/releases/tag/sample_iq_data)
+[here](https://github.com/williamyang98/16qam_modulator/releases/tag/sample_iq_data)
 
 ## TODO
 - Improve the demodulator by using better techniques
